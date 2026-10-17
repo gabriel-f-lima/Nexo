@@ -190,7 +190,7 @@ export default function Drawer() {
                 </div>
               </button>
 
-              <p className="center muted" style={{ fontSize: 12, marginTop: 6 }}>NuvoraAi · versão 1.1.0</p>
+              <p className="center muted" style={{ fontSize: 12, marginTop: 6 }}>NuvoraAi · versão 1.2.0</p>
             </motion.aside>
           </>
         ) : null}

@@ -9,6 +9,7 @@ import { confirmAction } from '../lib/confirm';
 import { toISODate } from '../lib/dates';
 import { canEditFinanceDay, earliestFinanceDay } from '../lib/rules';
 import DatePickerField from './DatePickerField';
+import SelectField from './SelectField';
 import NoticeBox from './NoticeBox';
 
 interface Props {
@@ -127,10 +128,12 @@ function TransactionFormBody({ editing, categories, onDone }: { editing: Transac
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: -6 }}>{CURRENCY_LABEL[currency]}</p>
 
-      <select className="input" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} aria-label="Categoria">
-        <option value="">Sem categoria</option>
-        {options.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-      </select>
+      <SelectField
+        label="Categoria"
+        value={categoryId}
+        onChange={setCategoryId}
+        options={[{ value: '', label: 'Sem categoria' }, ...options.map((c) => ({ value: c.id, label: c.name }))]}
+      />
 
       <DatePickerField label="Data" value={date} onChange={setDate} min={earliestFinanceDay()} />
       <NoticeBox>Você pode lançar hoje, ontem ou datas futuras. Dias anteriores a ontem ficam só para consulta.</NoticeBox>
