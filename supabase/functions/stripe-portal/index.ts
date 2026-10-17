@@ -10,7 +10,7 @@ const headers = {
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
 
-Deno.serve(async (req) => {
+const handle = async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers });
   if (req.method !== 'POST') return json({ error: 'Método não permitido.' }, 405);
 
@@ -43,4 +43,14 @@ Deno.serve(async (req) => {
   });
 
   return json({ url: portal.url });
+};
+
+// Qualquer falha inesperada vira uma resposta JSON com CORS, em vez de quebrar a função.
+Deno.serve(async (req) => {
+  try {
+    return await handle(req);
+  } catch (error) {
+    console.error('stripe-portal', error);
+    return json({ error: 'Não foi possível abrir o portal. Tente novamente.' }, 500);
+  }
 });

@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Bell, BellOff, CalendarDays, CheckSquare, HelpCircle, Settings, Sparkles, Wallet, X, Zap, Shield, Calendar, ChevronRight } from 'lucide-react';
 import { useUiStore } from '../store/ui';
+import { useAuthStore } from '../store/auth';
+import { useTier } from '../lib/useTier';
 import { notify } from '../lib/toast';
 import {
   canNotify, disableReminder, enableReminder, getReminder, sendTestNotification, type DailyReminder,
@@ -139,6 +141,7 @@ export default function Drawer() {
                 </div>
               </button>
 
+              <PlanBadge />
               <nav className="card menu-card" aria-label="Principal">
                 {MENU.map((item) => (
                   <NavLink
@@ -187,7 +190,7 @@ export default function Drawer() {
                 </div>
               </button>
 
-              <p className="center muted" style={{ fontSize: 12, marginTop: 6 }}>NuvoraAi · versão 1.0.0</p>
+              <p className="center muted" style={{ fontSize: 12, marginTop: 6 }}>NuvoraAi · versão 1.1.0</p>
             </motion.aside>
           </>
         ) : null}
@@ -267,5 +270,22 @@ export default function Drawer() {
         ) : null}
       </AnimatePresence>
     </>
+  );
+}
+
+/** Mostra o plano atual no menu. Toque leva às configurações do plano. */
+function PlanBadge() {
+  const navigate = useNavigate();
+  const userId = useAuthStore((s) => s.user?.id);
+  const tier = useTier(userId);
+  const label = tier === 'loading'
+    ? 'Carregando plano…'
+    : tier === 'pro' ? 'Plano Pro' : tier === 'basico' ? 'Plano Básico' : 'Plano gratuito';
+  return (
+    <button type="button" className="plan-menu-chip" onClick={() => navigate('/app/configuracoes')}>
+      <span className={`plan-dot ${tier === 'loading' ? 'free' : tier}`} />
+      <span className="grow">{label}</span>
+      <ChevronRight size={16} />
+    </button>
   );
 }

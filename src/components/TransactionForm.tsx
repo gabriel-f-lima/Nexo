@@ -7,6 +7,9 @@ import { useFinanceStore, type Category, type Transaction, type TransactionInput
 import { CURRENCIES, CURRENCY_LABEL, centsToInput, parseAmountToCents, type Currency, type TransactionType } from '../lib/finance';
 import { confirmAction } from '../lib/confirm';
 import { toISODate } from '../lib/dates';
+import { canEditFinanceDay, earliestFinanceDay } from '../lib/rules';
+import DatePickerField from './DatePickerField';
+import NoticeBox from './NoticeBox';
 
 interface Props {
   open: boolean;
@@ -50,6 +53,7 @@ function TransactionFormBody({ editing, categories, onDone }: { editing: Transac
     const cents = parseAmountToCents(amount);
     if (cents === null) { setError('Informe um valor válido, como 25,90.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { setError('Escolha uma data válida.'); return; }
+    if (!canEditFinanceDay(date)) { setError('Você pode lançar hoje, ontem ou uma data futura.'); return; }
 
     const input: TransactionInput = {
       type,
@@ -128,7 +132,8 @@ function TransactionFormBody({ editing, categories, onDone }: { editing: Transac
         {options.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
       </select>
 
-      <input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Data" />
+      <DatePickerField label="Data" value={date} onChange={setDate} min={earliestFinanceDay()} />
+      <NoticeBox>Você pode lançar hoje, ontem ou datas futuras. Dias anteriores a ontem ficam só para consulta.</NoticeBox>
       <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Descrição (opcional)" maxLength={120} />
 
       {error ? <p className="error">{error}</p> : null}

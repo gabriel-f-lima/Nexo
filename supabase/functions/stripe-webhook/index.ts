@@ -3,6 +3,21 @@
 import Stripe from 'npm:stripe@17.4.0';
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+// Mapeia o ID do preço da Stripe para o plano (basico | pro), usando os mesmos secrets do checkout.
+const PLAN_BY_PRICE_ENV: Array<[string, string]> = [
+  ['STRIPE_PRICE_BASICO_MONTHLY', 'basico'],
+  ['STRIPE_PRICE_BASICO_YEARLY', 'basico'],
+  ['STRIPE_PRICE_PRO_MONTHLY', 'pro'],
+  ['STRIPE_PRICE_PRO_YEARLY', 'pro'],
+];
+const planFromPrice = (priceId: string | undefined | null): string | null => {
+  if (!priceId) return null;
+  for (const [envName, plan] of PLAN_BY_PRICE_ENV) {
+    if (Deno.env.get(envName) === priceId) return plan;
+  }
+  return null;
+};
+
 Deno.serve(async (req) => {
   const signature = req.headers.get('stripe-signature');
   const secret = Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? '';
@@ -47,6 +62,7 @@ Deno.serve(async (req) => {
     stripe_subscription_id: sub.id,
     status: event.type === 'customer.subscription.deleted' ? 'canceled' : sub.status,
     price_id: item?.price.id ?? null,
+    plan: planFromPrice(item?.price.id) ?? (sub.metadata?.plan as string | undefined) ?? null,
     interval: item?.price.recurring?.interval ?? null,
     current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
     cancel_at_period_end: sub.cancel_at_period_end,

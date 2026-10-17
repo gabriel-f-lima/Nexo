@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
 import { toISODate } from '../lib/dates';
+import { canEditHabitDay, isPastEvent } from '../lib/rules';
 
 /* Tipos espelham o aplicativo mobile (src/types/index.ts). */
 
@@ -296,7 +297,7 @@ export const useDataStore = create<DataState>()((set, get) => ({
 
   addEvent: (title, start, location) => {
     const clean = title.trim().slice(0, MAX_TITLE);
-    if (!clean) return;
+    if (!clean || isPastEvent(start)) return;
     const event: AgendaEvent = {
       id: createId(),
       title: clean,
@@ -308,6 +309,8 @@ export const useDataStore = create<DataState>()((set, get) => ({
   },
 
   removeEvent: (id) => {
+    const current = get().events.find((e) => e.id === id);
+    if (current && isPastEvent(current.start)) return;
     set((s) => ({ events: s.events.filter((e) => e.id !== id) }));
     void deleteRow('nexo_events', id);
   },
@@ -326,6 +329,7 @@ export const useDataStore = create<DataState>()((set, get) => ({
   },
 
   toggleHabitForDate: (id, date) => {
+    if (!canEditHabitDay(date)) return;
     let changed: Habit | undefined;
     set((s) => ({
       habits: s.habits.map((h) => {

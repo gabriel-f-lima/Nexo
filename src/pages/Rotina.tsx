@@ -6,6 +6,10 @@ import { useDataStore, type Habit } from '../store/data';
 import { useAuthStore } from '../store/auth';
 import { confirmAction } from '../lib/confirm';
 import { addDays, formatLongDate, parseDateKey, toISODate, weekStart } from '../lib/dates';
+import { canEditHabitDay } from '../lib/rules';
+import { LIMITS } from '../lib/billing';
+import { useTier } from '../lib/useTier';
+import Paywall from '../components/Paywall';
 
 const DAY_NAMES = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
@@ -29,6 +33,16 @@ export default function Rotina() {
   const removeHabit = useDataStore((s) => s.removeHabit);
   const toggleHabitForDate = useDataStore((s) => s.toggleHabitForDate);
   const requireAuth = useAuthStore((s) => s.requireAuth);
+  const userId = useAuthStore((s) => s.user?.id);
+  const tier = useTier(userId);
+  const [paywall, setPaywall] = useState<string | null>(null);
+  // Enquanto o nível carrega, vale o limite do gratuito (o mais restrito).
+  const tierNow = tier === 'loading' ? 'free' : tier;
+  const habitLimit = LIMITS[tierNow].habits;
+  const limitMessage = tierNow === 'free'
+    ? `Você já tem ${habitLimit} metas de rotina, o limite do plano gratuito. Exclua uma para criar outra, ou assine para ter mais.`
+    : `Você já tem ${habitLimit} metas de rotina, o limite do seu plano. Assine o Pro para metas ilimitadas.`;
+  const atHabitLimit = habitLimit !== null && habits.length >= habitLimit;
 
   const today = toISODate();
   const [selectedDate, setSelectedDate] = useState(today);
@@ -39,6 +53,7 @@ export default function Rotina() {
 
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(week, i)), [week]);
   const completed = habits.filter((h) => h.doneDates.includes(selectedDate)).length;
+  const editableDay = canEditHabitDay(selectedDate);
   const nextWeekBlocked = toISODate(addDays(week, 7)) > today;
 
   const save = (event: FormEvent) => {
@@ -46,6 +61,11 @@ export default function Rotina() {
     const clean = habitName.trim();
     if (!clean) { setFormError('Escreva o nome do hábito.'); return; }
     requireAuth(() => {
+      if (atHabitLimit) {
+        setFormOpen(false);
+        setPaywall(limitMessage);
+        return;
+      }
       addHabit(clean);
       setFormOpen(false);
       setHabitName('');
@@ -88,7 +108,7 @@ export default function Rotina() {
             />
           </div>
           <p className="text-2" style={{ fontSize: 12, marginTop: 12 }}>
-            {selectedDate === today ? 'O que já conseguiu fazer hoje?' : `Resumo de ${formatLongDate(parseDateKey(selectedDate))}`}
+            {selectedDate === today ? 'O que já conseguiu fazer hoje?' : editableDay ? 'Você pode marcar o que fez ontem.' : `Resumo de ${formatLongDate(parseDateKey(selectedDate))}`}
           </p>
         </motion.div>
 
@@ -154,7 +174,10 @@ export default function Rotina() {
             className="icon-btn"
             whileTap={{ scale: 0.9 }}
             whileHover={{ scale: 1.05 }}
-            onClick={() => { setHabitName(''); setFormError(''); setFormOpen(true); }}
+            onClick={() => {
+              if (atHabitLimit) { setPaywall(limitMessage); return; }
+              setHabitName(''); setFormError(''); setFormOpen(true);
+            }}
             aria-label="Adicionar hábito"
             style={{ background: 'var(--accent)', color: 'var(--bg)', border: 0 }}
           >
@@ -182,6 +205,7 @@ export default function Rotina() {
                   className="grow"
                   whileTap={{ scale: 0.99 }}
                   onClick={() => requireAuth(() => toggleHabitForDate(habit.id, selectedDate))}
+                  disabled={!editableDay}
                   aria-pressed={done}
                   style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px', textAlign: 'left', minWidth: 0 }}
                 >
@@ -226,6 +250,7 @@ export default function Rotina() {
           <motion.button type="submit" whileTap={{ scale: 0.98 }} className="btn btn-primary btn-block">Salvar hábito</motion.button>
         </form>
       </Modal>
+      <Paywall open={paywall !== null} onClose={() => setPaywall(null)} title="Limite de metas de rotina" message={paywall ?? ''} />
     </div>
   );
 }

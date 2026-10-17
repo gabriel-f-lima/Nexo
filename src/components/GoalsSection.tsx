@@ -7,6 +7,10 @@ import { useFinanceStore, type Goal } from '../store/finance';
 import { CURRENCIES, centsToInput, formatMoney, parseAmountToCents, type Currency } from '../lib/finance';
 import { confirmAction } from '../lib/confirm';
 import { toISODate } from '../lib/dates';
+import { currentTier, LIMITS } from '../lib/billing';
+import Paywall from './Paywall';
+import DatePickerField from './DatePickerField';
+import NoticeBox from './NoticeBox';
 
 /** Lista de metas com progresso. Adicionar valor e apagar exigem conta. */
 export default function GoalsSection() {
@@ -15,6 +19,25 @@ export default function GoalsSection() {
   const removeGoal = useFinanceStore((s) => s.removeGoal);
   const [formOpen, setFormOpen] = useState(false);
   const [savingFor, setSavingFor] = useState<Goal | null>(null);
+  const userId = useAuthStore((s) => s.user?.id);
+  const [paywall, setPaywall] = useState<string | null>(null);
+
+  /** Quantas metas o nível permite. Ao atingir o limite, mostra o aviso com os planos. */
+  const newGoal = () => requireAuth(() => {
+    if (!userId) return;
+    currentTier(userId)
+      .then((tier) => {
+        const max = LIMITS[tier].goals;
+        if (max === null || goals.length < max) {
+          setFormOpen(true);
+          return;
+        }
+        setPaywall(tier === 'free'
+          ? `Você já tem ${max} metas, o limite do plano gratuito. Exclua uma para criar outra, ou assine para ter mais.`
+          : `Você já tem ${max} metas, o limite do seu plano. Assine o Pro para metas ilimitadas.`);
+      })
+      .catch(() => setPaywall('Não foi possível verificar seu plano agora. Tente novamente.'));
+  });
 
   const remove = async (goal: Goal) => {
     const ok = await confirmAction({
@@ -33,7 +56,7 @@ export default function GoalsSection() {
           <div className="section-title">Metas</div>
           <div className="section-hint">Acompanhe o que você quer juntar</div>
         </div>
-        <motion.button type="button" className="icon-btn" whileTap={{ scale: 0.9 }} onClick={() => requireAuth(() => setFormOpen(true))} aria-label="Nova meta" style={{ background: 'var(--accent)', color: 'var(--bg)', border: 0 }}>
+        <motion.button type="button" className="icon-btn" whileTap={{ scale: 0.9 }} onClick={newGoal} aria-label="Nova meta" style={{ background: 'var(--accent)', color: 'var(--bg)', border: 0 }}>
           <Plus size={20} />
         </motion.button>
       </div>
@@ -83,6 +106,8 @@ export default function GoalsSection() {
 
       <GoalForm open={formOpen} onClose={() => setFormOpen(false)} />
       <SavingForm goal={savingFor} onClose={() => setSavingFor(null)} />
+
+      <Paywall open={paywall !== null} onClose={() => setPaywall(null)} title="Limite de metas" message={paywall ?? ''} />
     </div>
   );
 }
@@ -125,7 +150,8 @@ function GoalFormBody({ onDone }: { onDone: () => void }) {
           {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
       </div>
-      <input className="input" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} aria-label="Prazo (opcional)" />
+      <DatePickerField label="Prazo (opcional)" value={deadline} onChange={setDeadline} min={toISODate()} clearable />
+      <NoticeBox>Opcional. Escolha até quando quer juntar o valor da meta, a partir de hoje.</NoticeBox>
       {error ? <p className="error">{error}</p> : null}
       <motion.button type="submit" whileTap={{ scale: 0.98 }} className="btn btn-primary btn-block">Criar meta</motion.button>
     </form>

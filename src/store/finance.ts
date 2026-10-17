@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../lib/supabase';
 import { DEFAULT_CATEGORIES, type Currency, type TransactionType } from '../lib/finance';
 import { selectAll, writeOp } from './data';
+import { canEditFinanceDay } from '../lib/rules';
 
 export interface Category { id: string; name: string; color: string; kind: TransactionType }
 export interface Transaction {
@@ -155,6 +156,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
     reset: () => set({ userId: null, loaded: false, categories: [], transactions: [], goals: [] }),
 
     addTransaction: (input) => {
+    if (!canEditFinanceDay(input.occurredOn)) return;
       const userId = get().userId;
       if (!userId) return;
       const transaction: Transaction = {
@@ -171,6 +173,8 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
     },
 
     updateTransaction: (id, input) => {
+    const current = get().transactions.find((t) => t.id === id);
+    if (!canEditFinanceDay(input.occurredOn) || (current && !canEditFinanceDay(current.occurredOn))) return;
       const userId = get().userId;
       if (!userId) return;
       set((s) => ({
@@ -182,6 +186,8 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
     },
 
     removeTransaction: (id) => {
+    const current = get().transactions.find((t) => t.id === id);
+    if (current && !canEditFinanceDay(current.occurredOn)) return;
       const userId = get().userId;
       if (!userId) return;
       set((s) => ({ transactions: s.transactions.filter((t) => t.id !== id) }));

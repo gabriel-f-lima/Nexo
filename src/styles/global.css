@@ -211,8 +211,8 @@ img { display: block; max-width: 100%; }
 .cal-day.today .num { border: 1px solid var(--accent); }
 .cal-day .pin { width: 4px; height: 4px; border-radius: 50%; background: transparent; }
 .cal-day .pin.on { background: var(--accent); }
-.cal-selected { position: absolute; inset: 7px 7px 13px; border-radius: 50%; background: var(--accent); z-index: 0; }
-.cal-day.sel .num { color: var(--bg); font-weight: 700; }
+.cal-selected { display: none; }
+.cal-day.sel .num { color: var(--bg); font-weight: 700; background: var(--accent); border-color: var(--accent); }
 .cal-day.sel .pin.on { background: var(--bg); }
 
 /* Semana (rotina) */
@@ -375,4 +375,149 @@ img { display: block; max-width: 100%; }
 .task-row, .habit-row { padding: 15px 16px; border-radius: 16px; }
 
 /* Círculo do dia selecionado: sempre redondo */
-.cal-selected { aspect-ratio: 1 / 1; width: 32px; height: 32px; top: 7px; left: 50%; margin-left: -16px; inset: auto; }
+
+/* ===== Planos ===== */
+.plans { display: grid; gap: 18px; }
+.plans-toggle { justify-self: center; display: inline-flex; padding: 4px; border-radius: 999px; background: var(--card-2); border: 1px solid var(--border); }
+.plans-toggle-btn { padding: 8px 20px; border-radius: 999px; font-size: 14px; font-weight: 600; color: var(--muted); transition: background .25s var(--ease), color .25s var(--ease); }
+.plans-toggle-btn.is-active { background: var(--accent); color: var(--bg); }
+.plans-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+.plans-note { font-size: 13px; color: var(--muted); text-align: center; }
+.plan-card { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 24px; border-radius: 22px; background: var(--card); border: 1px solid var(--border); transition: transform .25s var(--ease), border-color .25s var(--ease); }
+.plan-card:hover { transform: translateY(-3px); border-color: var(--accent-border); }
+.plan-card.is-featured { background: linear-gradient(180deg, rgba(90, 240, 170, 0.12), var(--card) 55%); border-color: var(--accent-border); box-shadow: 0 24px 60px -28px rgba(90, 240, 170, 0.45); }
+.plan-badge { position: absolute; top: -11px; right: 18px; padding: 4px 11px; border-radius: 999px; background: var(--accent); color: var(--bg); font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.plan-name { font-size: 18px; font-weight: 800; }
+.plan-tagline { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.plan-price-row { display: flex; align-items: baseline; gap: 6px; }
+.plan-price { font-size: 34px; font-weight: 800; letter-spacing: -.02em; }
+.plan-period { font-size: 14px; color: var(--muted); }
+.plan-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); min-height: 24px; }
+.plan-chip { display: inline-block; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
+.plan-benefits { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 10px; }
+.plan-benefits li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; color: var(--text-2); line-height: 1.45; }
+.plan-benefits svg { flex: none; margin-top: 2px; color: var(--accent); }
+.plan-card .btn { margin-top: auto; }
+.plan-skeleton { min-height: 360px; animation: plan-pulse 1.4s ease-in-out infinite; }
+@keyframes plan-pulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
+.plan-status { display: grid; gap: 12px; }
+@media (prefers-reduced-motion: reduce) { .plan-card, .plan-skeleton { transition: none; animation: none; } }
+
+.plans-note { font-size: 13px; color: var(--muted); text-align: center; margin: 0; }
+
+/* ===== Financeiro: layout responsivo ===== */
+/* Itens do grid podem encolher: impede a página de vazar para os lados no celular */
+.screen-stack > * { min-width: 0; }
+/* Gráficos SVG nunca passam da largura do cartão */
+.card svg { display: block; max-width: 100%; height: auto; }
+/* Chips de período: uma linha rolável, sem barra visível */
+.screen-stack > .row.gap-sm:has(> .chip) { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.screen-stack > .row.gap-sm:has(> .chip)::-webkit-scrollbar { display: none; }
+.screen-stack > .row.gap-sm > .chip { flex: 0 0 auto; white-space: nowrap; }
+/* Valores grandes acompanham a largura da tela */
+.stat-line { font-size: clamp(20px, 6.5vw, 26px); flex-wrap: wrap; }
+.hero-card .stat-line { font-size: clamp(24px, 8vw, 32px); }
+/* Linhas de totais quebram em telas estreitas */
+.card .row.gap-md { flex-wrap: wrap; }
+/* Margens menores no celular */
+@media (max-width: 480px) {
+  .screen { padding: 0 16px 120px; }
+  .card { padding: 14px; }
+  .screen-stack { gap: 16px; }
+}
+
+/* ===== Planos: o botão flutuante do assistente não fica por cima dos planos ===== */
+body:has(.plans) .fab { display: none; }
+.plan-card .btn { min-height: 46px; }
+
+/* ===== Upgrade e plano no menu ===== */
+.upgrade-lines { display: grid; gap: 10px; }
+.upgrade-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 14px; background: var(--card-2); font-size: 14px; color: var(--text-2); }
+.upgrade-line strong { font-size: 18px; font-weight: 800; color: var(--text); }
+.plan-menu-chip { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; margin-bottom: 12px; border-radius: 14px; background: var(--card-2); border: 1px solid var(--border); color: var(--text); font-size: 14px; font-weight: 600; text-align: left; }
+.plan-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.plan-dot.basico { background: var(--accent-2); }
+.plan-dot.pro { background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+
+/* ===== Selects: seta própria e tema escuro ===== */
+select,
+select.input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  color-scheme: dark;
+  color: var(--text);
+  background-color: var(--card-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23b9c7bf' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 14px 14px;
+  padding-right: 40px;
+  cursor: pointer;
+}
+select option,
+select optgroup {
+  background-color: var(--card);
+  color: var(--text);
+}
+select:focus-visible,
+select.input:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}
+select:disabled,
+select.input:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* ===== Opções do select: contraste na opção selecionada e em foco ===== */
+select option {
+  background-color: #111a16;
+  color: #e9f1ec;
+  padding: 8px 12px;
+}
+select option:checked,
+select option:hover,
+select option:focus,
+select option:focus-visible {
+  background-color: #24402f !important;
+  color: #5af0aa !important;
+}
+
+/* ===== Campos de data e avisos ===== */
+.field-hint { font-size: 12px; line-height: 1.45; color: var(--muted); margin: -4px 2px 0; }
+input[type="date"] {
+  color-scheme: dark;
+  color: var(--text);
+  background-color: var(--card-2);
+  min-height: 44px;
+  font-variant-numeric: tabular-nums;
+}
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: .95;
+  padding: 4px;
+  border-radius: 8px;
+  filter: invert(78%) sepia(40%) saturate(600%) hue-rotate(100deg) brightness(105%);
+}
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+  background-color: var(--accent-soft);
+}
+input[type="date"]:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 2px;
+}
+input[type="date"]:disabled { opacity: .55; cursor: not-allowed; }
+
+/* ===== Calendário do Nuvora e avisos ===== */
+.dp { position: relative; }
+.dp-trigger { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; cursor: pointer; color: var(--text); }
+.dp-trigger svg { color: var(--accent); flex: none; }
+.dp-placeholder { color: var(--muted); }
+.dp-pop { position: absolute; top: calc(100% + 8px); left: 0; z-index: 70; width: min(100%, 340px); box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .6); }
+.cal-day:disabled { opacity: .35; cursor: not-allowed; }
+.cal-day:disabled .num { color: var(--muted); }
+.notice-box { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--text-2); font-size: 13px; line-height: 1.5; }
+.notice-box svg { flex: none; color: var(--accent); margin-top: 2px; }
+.notice-box p { margin: 0; }

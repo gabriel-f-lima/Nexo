@@ -2,9 +2,13 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ChevronLeft, ChevronRight, Plus, Trash2, Calendar as CalendarIcon } from 'lucide-react';
 import { Header, Modal } from '../components/ui';
+import Paywall from '../components/Paywall';
+import { currentTier, LIMITS } from '../lib/billing';
 import { useDataStore } from '../store/data';
 import { useAuthStore } from '../store/auth';
 import { confirmAction } from '../lib/confirm';
+import { notify } from '../lib/toast';
+import { isPastDay } from '../lib/rules';
 import { MONTHS, formatLongDate, formatTime, parseDateKey, toISODate } from '../lib/dates';
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -15,6 +19,8 @@ export default function Agenda() {
   const addEvent = useDataStore((s) => s.addEvent);
   const removeEvent = useDataStore((s) => s.removeEvent);
   const requireAuth = useAuthStore((s) => s.requireAuth);
+  const userId = useAuthStore((s) => s.user?.id);
+  const [paywall, setPaywall] = useState<string | null>(null);
 
   const today = toISODate();
   const [selectedDate, setSelectedDate] = useState(today);
@@ -54,6 +60,7 @@ export default function Agenda() {
   };
 
   const openForm = () => {
+    if (isPastDay(selectedDate)) { notify('Dia passado: você pode apenas consultar os compromissos.', 'info'); return; }
     setTitle('');
     setTime('09:00');
     setLocation('');
@@ -68,12 +75,26 @@ export default function Agenda() {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) { setFormError('Indique a hora no formato HH:MM.'); return; }
     const start = new Date(`${selectedDate}T${time}:00`);
     requireAuth(() => {
-      addEvent(clean, start.toISOString(), location);
-      setFormOpen(false);
+      if (!userId) return;
+      currentTier(userId)
+        .then((tier) => {
+          const max = LIMITS[tier].eventsPerDay;
+          const sameDay = events.filter((e) => toISODate(new Date(e.start)) === selectedDate).length;
+          setFormOpen(false);
+          if (max === null || sameDay < max) {
+            addEvent(clean, start.toISOString(), location);
+            return;
+          }
+          setPaywall(tier === 'free'
+            ? `No plano gratuito você tem até ${max} compromissos por dia. Assine para ter mais.`
+            : `Você já tem ${max} compromissos neste dia, o limite do seu plano. Assine o Pro para compromissos ilimitados.`);
+        })
+        .catch(() => setPaywall('Não foi possível verificar seu plano agora. Tente novamente.'));
     });
   };
 
   const remove = async (id: string, name: string) => {
+    if (isPastDay(selectedDate)) { notify('Dia passado: os compromissos não podem ser removidos.', 'info'); return; }
     const ok = await confirmAction({
       title: 'Remover compromisso',
       message: `Quer remover “${name}” da agenda?`,
@@ -191,6 +212,7 @@ export default function Agenda() {
           <motion.button type="submit" whileTap={{ scale: 0.98 }} className="btn btn-primary btn-block">Guardar compromisso</motion.button>
         </form>
       </Modal>
+      <Paywall open={paywall !== null} onClose={() => setPaywall(null)} title="Limite de compromissos" message={paywall ?? ''} />
     </div>
   );
 }

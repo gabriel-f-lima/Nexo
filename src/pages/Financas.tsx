@@ -1,12 +1,18 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Download, FileSpreadsheet, Plus, Tags, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Download, FileSpreadsheet, Lock, Plus, Tags, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 import { Header } from '../components/ui';
 import TransactionForm from '../components/TransactionForm';
 import CategoryManager from '../components/CategoryManager';
 import GoalsSection from '../components/GoalsSection';
+import Paywall from '../components/Paywall';
+import Plans from '../components/Plans';
+import { LIMITS, type Limits } from '../lib/billing';
+import { useTier } from '../lib/useTier';
 import { BalanceLine, BarsChart, DonutChart, type BarDatum, type LinePoint, type SliceDatum } from '../components/charts';
 import { useFinanceStore, type Transaction } from '../store/finance';
+import { canEditFinanceDay } from '../lib/rules';
+import { notify } from '../lib/toast';
 import { useAuthStore } from '../store/auth';
 import { MONTHS, formatLongDate, parseDateKey } from '../lib/dates';
 import { CURRENCIES, formatMoney, monthKeyOf, totalsByCurrency, type Currency } from '../lib/finance';
@@ -16,7 +22,7 @@ import { downloadCsv, downloadXlsx, toExportRows } from '../lib/export';
 const NO_CATEGORY_COLOR = '#A1ADA6';
 
 /** Financeiro: lançamentos, gráficos por período, metas e exportação. */
-export default function Financas() {
+function FinancasContent({ limits }: { limits: Limits }) {
   const transactions = useFinanceStore((s) => s.transactions);
   const categories = useFinanceStore((s) => s.categories);
   const goals = useFinanceStore((s) => s.goals);
@@ -31,6 +37,7 @@ export default function Financas() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [paywall, setPaywall] = useState<string | null>(null);
 
   const [period, setPeriod] = useState<Period>('month');
   const [ref, setRef] = useState(() => new Date());
@@ -98,18 +105,30 @@ export default function Financas() {
   const exportAll = () => transactions.filter((t) => t.occurredOn >= range.start && t.occurredOn <= range.end);
 
   const doCsv = () => {
+    if (!limits.csvExport) { setPaywall('A exportação faz parte dos planos pagos.'); return; }
     const rows = toExportRows(exportAll(), categories);
     if (!rows.length) return;
     downloadCsv(rows, `${exportName}.csv`);
   };
   const doXlsx = () => {
+    if (!limits.xlsxExport) { setPaywall('A exportação em planilha Excel faz parte do plano Pro.'); return; }
     const rows = toExportRows(exportAll(), categories);
     if (!rows.length) return;
     downloadXlsx(rows, goals, `${exportName}.xlsx`);
   };
 
-  const openNew = () => requireAuth(() => { setEditing(null); setFormOpen(true); });
-  const openEdit = (t: Transaction) => { setEditing(t); setFormOpen(true); };
+  const openNew = () => requireAuth(() => {
+    if (limits.monthlyEntries !== null && monthItems.length >= limits.monthlyEntries) {
+      setPaywall(`Seu plano permite até ${limits.monthlyEntries} lançamentos por mês. Assine o Pro para lançamentos ilimitados.`);
+      return;
+    }
+    setEditing(null);
+    setFormOpen(true);
+  });
+  const openEdit = (t: Transaction) => {
+    if (!canEditFinanceDay(t.occurredOn)) { notify('Lançamentos de dias anteriores a ontem ficam só para consulta.', 'info'); return; }
+    setEditing(t); setFormOpen(true);
+  };
   const categoryName = (id: string | null) => categories.find((c) => c.id === id);
 
   return (
@@ -203,9 +222,9 @@ export default function Financas() {
 
         <div className="row gap-sm" style={{ overflowX: 'auto', paddingBottom: 2 }}>
           {PERIODS.map((p) => (
-            <button key={p.value} type="button" className="chip" aria-pressed={period === p.value} onClick={() => setPeriod(p.value)}
+            <button key={p.value} type="button" className="chip" aria-pressed={period === p.value} onClick={() => (limits.periods.includes(p.value) ? setPeriod(p.value) : setPaywall(`A análise por ${p.label.toLowerCase()} está disponível no plano Pro.`))}
               style={period === p.value ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}>
-              {p.label}
+              {p.label}{limits.periods.includes(p.value) ? null : <Lock size={12} style={{ marginLeft: 6, verticalAlign: 'middle' }} />}
             </button>
           ))}
         </div>
@@ -292,6 +311,33 @@ export default function Financas() {
 
       <TransactionForm open={formOpen} onClose={() => setFormOpen(false)} editing={editing} />
       <CategoryManager open={categoriesOpen} onClose={() => setCategoriesOpen(false)} />
+      <Paywall open={paywall !== null} onClose={() => setPaywall(null)} title="Recurso dos planos" message={paywall ?? ''} />
+    </div>
+  );
+}
+
+/** Gestão financeira: liberada nos planos pagos, com os limites de cada nível. */
+export default function Financas() {
+  const userId = useAuthStore((s) => s.user?.id);
+  const tier = useTier(userId);
+  if (tier === 'loading') return <div className="card text-2" style={{ fontSize: 13 }}>Carregando…</div>;
+  if (!LIMITS[tier].finance) return <FinanceLocked />;
+  return <FinancasContent limits={LIMITS[tier]} />;
+}
+
+function FinanceLocked() {
+  return (
+    <div className="screen">
+      <Header title="Controle financeiro" subtitle="Disponível nos planos pagos" />
+      <div className="screen-stack">
+        <div className="card" style={{ display: 'grid', gap: 8 }}>
+          <div className="row gap-sm"><Lock size={16} color="var(--accent)" /><strong>Gestão financeira</strong></div>
+          <p className="text-2" style={{ fontSize: 14, lineHeight: 1.5 }}>
+            Lançamentos, gráficos, metas e exportação. No Básico você registra até {LIMITS.basico.monthlyEntries} lançamentos por mês; no Pro, sem limite.
+          </p>
+        </div>
+        <Plans />
+      </div>
     </div>
   );
 }

@@ -8,9 +8,16 @@ const headers = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json; charset=utf-8',
 };
+// Um secret de preço por plano e intervalo. Os nomes devem existir nos secrets do Supabase.
+const PRICE_ENV: Record<string, string> = {
+  basico_monthly: 'STRIPE_PRICE_BASICO_MONTHLY',
+  basico_yearly: 'STRIPE_PRICE_BASICO_YEARLY',
+  pro_monthly: 'STRIPE_PRICE_PRO_MONTHLY',
+  pro_yearly: 'STRIPE_PRICE_PRO_YEARLY',
+};
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
 
-Deno.serve(async (req) => {
+const handle = async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers });
   if (req.method !== 'POST') return json({ error: 'Método não permitido.' }, 405);
 
@@ -29,10 +36,13 @@ Deno.serve(async (req) => {
   if (userError || !userData.user) return json({ error: 'Sessão inválida.' }, 401);
   const user = userData.user;
 
-  let body: { interval?: string } = {};
+  let body: { plan?: string; interval?: string } = {};
   try { body = await req.json(); } catch { /* corpo vazio */ }
   const interval = body.interval === 'yearly' ? 'yearly' : 'monthly';
-  const price = interval === 'yearly' ? Deno.env.get('STRIPE_PRICE_YEARLY') : Deno.env.get('STRIPE_PRICE_MONTHLY');
+  const plan = typeof body.plan === 'string' ? body.plan : '';
+  const priceEnv = PRICE_ENV[`${plan}_${interval}`];
+  if (!priceEnv) return json({ error: 'Plano inválido.' }, 400);
+  const price = Deno.env.get(priceEnv);
   if (!price) return json({ error: 'Plano não configurado no servidor.' }, 500);
 
   const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -64,6 +74,16 @@ Deno.serve(async (req) => {
     if (saveError) return json({ error: 'Não foi possível preparar o pagamento.' }, 500);
   }
 
+  // Confere na Stripe todos os clientes com este e-mail, porque o banco pode ter perdido o vínculo com o cliente antigo.
+  const byEmail = user.email ? await stripe.customers.list({ email: user.email, limit: 10 }) : { data: [] };
+  const customerIds = new Set<string>([customerId as string, ...byEmail.data.map((c) => c.id)]);
+  for (const id of customerIds) {
+    const subs = await stripe.subscriptions.list({ customer: id, status: 'all', limit: 10 });
+    if (subs.data.some((s) => ['active', 'trialing', 'past_due'].includes(s.status))) {
+      return json({ error: 'Você já tem uma assinatura ativa. Use “Gerenciar assinatura”.' }, 409);
+    }
+  }
+
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: customerId,
@@ -74,10 +94,20 @@ Deno.serve(async (req) => {
     automatic_tax: { enabled: true },
     customer_update: { address: 'auto', name: 'auto' },
     tax_id_collection: { enabled: true },
-    subscription_data: { metadata: { user_id: user.id } },
+    subscription_data: { metadata: { user_id: user.id, plan } },
     locale: 'pt-BR',
     allow_promotion_codes: true,
   });
 
   return json({ url: session.url });
+};
+
+// Qualquer falha inesperada vira uma resposta JSON com CORS, em vez de quebrar a função.
+Deno.serve(async (req) => {
+  try {
+    return await handle(req);
+  } catch (error) {
+    console.error('stripe-checkout', error);
+    return json({ error: 'Não foi possível iniciar o pagamento. Tente novamente.' }, 500);
+  }
 });
