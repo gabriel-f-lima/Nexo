@@ -122,9 +122,13 @@ function TransactionFormBody({ editing, categories, onDone }: { editing: Transac
           aria-label="Valor"
           autoFocus={!editing}
         />
-        <select className="input" style={{ width: 118 }} value={currency} onChange={(e) => setCurrency(e.target.value as Currency)} aria-label="Moeda">
-          {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <SelectField
+          label="Moeda"
+          width={118}
+          value={currency}
+          onChange={(next) => setCurrency(next as Currency)}
+          options={CURRENCIES.map((c) => ({ value: c, label: c }))}
+        />
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: -6 }}>{CURRENCY_LABEL[currency]}</p>
 

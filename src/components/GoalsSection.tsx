@@ -11,6 +11,7 @@ import { currentTier, LIMITS } from '../lib/billing';
 import Paywall from './Paywall';
 import DatePickerField from './DatePickerField';
 import NoticeBox from './NoticeBox';
+import SelectField from './SelectField';
 
 /** Lista de metas com progresso. Adicionar valor e apagar exigem conta. */
 export default function GoalsSection() {
@@ -146,9 +147,13 @@ function GoalFormBody({ onDone }: { onDone: () => void }) {
       <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome da meta" maxLength={60} autoFocus />
       <div className="row gap-sm">
         <input className="input grow" value={target} onChange={(e) => setTarget(e.target.value)} placeholder="Valor objetivo" inputMode="decimal" aria-label="Valor objetivo" />
-        <select className="input" style={{ width: 118 }} value={currency} onChange={(e) => setCurrency(e.target.value as Currency)} aria-label="Moeda">
-          {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <SelectField
+          label="Moeda"
+          width={118}
+          value={currency}
+          onChange={(next) => setCurrency(next as Currency)}
+          options={CURRENCIES.map((c) => ({ value: c, label: c }))}
+        />
       </div>
       <DatePickerField label="Prazo (opcional)" value={deadline} onChange={setDeadline} min={toISODate()} clearable />
       <NoticeBox>Opcional. Escolha até quando quer juntar o valor da meta, a partir de hoje.</NoticeBox>

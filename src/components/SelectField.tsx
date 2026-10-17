@@ -14,12 +14,14 @@ export default function SelectField({
   options,
   label,
   placeholder = 'Selecione',
+  width,
 }: {
   value: string;
   onChange: (value: string) => void;
   options: SelectOption[];
   label: string;
   placeholder?: string;
+  width?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -64,7 +66,7 @@ export default function SelectField({
   };
 
   return (
-    <div className="sf" ref={rootRef}>
+    <div className="sf" ref={rootRef} style={width ? { width, flex: 'none' } : undefined}>
       <button
         type="button"
         className="input sf-trigger"
