@@ -101,7 +101,7 @@ function FinancasContent({ limits }: { limits: Limits }) {
       .sort((a, b) => b.value - a.value);
   }, [periodItems, categories]);
 
-  const exportName = `nuvora-financeiro-${range.start}-a-${range.end}`;
+  const exportName = `nexo-financeiro-${range.start}-a-${range.end}`;
   const exportAll = () => transactions.filter((t) => t.occurredOn >= range.start && t.occurredOn <= range.end);
 
   const doCsv = () => {
@@ -114,7 +114,7 @@ function FinancasContent({ limits }: { limits: Limits }) {
     if (!limits.xlsxExport) { setPaywall('A exportação em planilha Excel faz parte do plano Pro.'); return; }
     const rows = toExportRows(exportAll(), categories);
     if (!rows.length) return;
-    downloadXlsx(rows, goals, `${exportName}.xlsx`);
+    downloadXlsx(rows, goals, `${exportName}.xlsx`).catch(() => notify('Não foi possível gerar a planilha. Tente novamente.', 'error'));
   };
 
   const openNew = () => requireAuth(() => {
@@ -190,7 +190,7 @@ function FinancasContent({ limits }: { limits: Limits }) {
 
         {groups.map(([day, items]) => (
           <div key={day} style={{ display: 'grid', gap: 8 }}>
-            <div className="section-hint" style={{ textTransform: 'capitalize', marginTop: 6 }}>{formatLongDate(parseDateKey(day))}</div>
+            <div className="section-hint" style={{ marginTop: 6 }}>{formatLongDate(parseDateKey(day))}</div>
             {items.map((t) => {
               const category = categoryName(t.categoryId);
               const income = t.type === 'income';
@@ -233,7 +233,7 @@ function FinancasContent({ limits }: { limits: Limits }) {
           <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setRef(shiftReference(period, ref, -1))} aria-label="Período anterior">
             <ChevronLeft size={17} />
           </motion.button>
-          <span className="text-2 center" style={{ fontSize: 13, textTransform: 'capitalize', flex: 1 }}>{range.label}</span>
+          <span className="text-2 center" style={{ fontSize: 13, flex: 1 }}>{range.label.charAt(0).toUpperCase() + range.label.slice(1)}</span>
           <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setRef(shiftReference(period, ref, 1))} aria-label="Próximo período">
             <ChevronRight size={17} />
           </motion.button>
@@ -320,7 +320,14 @@ function FinancasContent({ limits }: { limits: Limits }) {
 export default function Financas() {
   const userId = useAuthStore((s) => s.user?.id);
   const tier = useTier(userId);
-  if (tier === 'loading') return <div className="card text-2" style={{ fontSize: 13 }}>Carregando…</div>;
+  if (tier === 'loading') {
+    return (
+      <div className="screen">
+        <Header title="Controle financeiro" subtitle="Carregando seu plano…" />
+        <div className="loading-inline" role="status" aria-label="Carregando"><div className="spinner" /></div>
+      </div>
+    );
+  }
   if (!LIMITS[tier].finance) return <FinanceLocked />;
   return <FinancasContent limits={LIMITS[tier]} />;
 }

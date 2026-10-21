@@ -7,7 +7,7 @@ export interface SelectOption {
   label: string;
 }
 
-/** Menu de seleção no estilo do Nuvora. Funciona com mouse, toque e teclado (setas, Enter e Esc). */
+/** Menu de seleção no estilo do Nexo. Funciona com mouse, toque e teclado (setas, Enter e Esc). */
 export default function SelectField({
   value,
   onChange,

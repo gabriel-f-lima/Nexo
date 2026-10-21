@@ -89,7 +89,7 @@ export const writeOp = async (label: string, op: () => PromiseLike<{ error: unkn
   } catch (error) {
     useDataStore.setState({ syncStatus: 'error', syncMessage: 'Não foi possível sincronizar. Verifique a conexão.' });
     notify('Não foi possível salvar na nuvem. Tente novamente.', 'error');
-    if (import.meta.env.DEV) console.warn(`[nuvora] ${label}`, error);
+    if (import.meta.env.DEV) console.warn(`[nexo] ${label}`, error);
   }
 };
 
@@ -116,7 +116,7 @@ export const selectAll = async (table: string, columns: string, userId: string):
       .eq('user_id', userId)
       .range(from, from + PAGE - 1);
     if (error) throw error;
-    const page = (data ?? []) as Record<string, unknown>[];
+    const page = (data ?? []) as unknown as Record<string, unknown>[];
     rows.push(...page);
     if (page.length < PAGE) break;
   }
@@ -169,7 +169,15 @@ export const useDataStore = create<DataState>()((set, get) => ({
 
   activate: async (user) => {
     if (get().userId === user.id && get().loaded) return;
-    set({ userId: user.id, loaded: false, syncStatus: 'syncing', syncMessage: 'Carregando seus dados…' });
+    // Outra conta: nada da anterior pode continuar na tela enquanto esta carrega.
+    const switching = get().userId !== user.id;
+    set({
+      userId: user.id,
+      loaded: false,
+      syncStatus: 'syncing',
+      syncMessage: 'Carregando seus dados…',
+      ...(switching ? { tasks: [], events: [], habits: [], conversations: [], chatMessages: [], activeConversationId: null } : {}),
+    });
 
     try {
       // Primeiro acesso da conta: cria os hábitos iniciais e a marca de inicialização (como o app faz).
@@ -211,6 +219,30 @@ export const useDataStore = create<DataState>()((set, get) => ({
       // A conta pode ter mudado enquanto os dados carregavam.
       if (get().userId !== user.id) return;
 
+      // Uma conversa pode ter começado enquanto os dados carregavam (mensagem enviada logo após o login):
+      // ela continua aberta e na lista, em vez de ser apagada da tela.
+      const local = get();
+      const loadedConversations: Conversation[] = conversationRows.map((row) => {
+        const updated = String(row.updated_at ?? new Date().toISOString());
+        return {
+          id: String(row.id),
+          title: String(row.title ?? 'Conversa'),
+          createdAt: String(row.created_at ?? updated),
+          updatedAt: updated,
+          lastAccessedAt: String(row.last_accessed_at ?? updated),
+          important: Boolean(row.important),
+          messageCount: Number(row.message_count ?? 0),
+          messages: [],
+          messagesLoaded: false,
+        };
+      });
+      const startedMeanwhile = local.conversations.filter((c) => c.messagesLoaded);
+      const conversations = [
+        ...loadedConversations.filter((c) => !startedMeanwhile.some((s) => s.id === c.id)),
+        ...startedMeanwhile,
+      ];
+      const keepActive = startedMeanwhile.some((c) => c.id === local.activeConversationId);
+
       set({
         tasks: taskRows.map((row) => ({
           id: String(row.id),
@@ -230,22 +262,9 @@ export const useDataStore = create<DataState>()((set, get) => ({
           name: String(row.name),
           doneDates: Array.isArray(row.done_dates) ? row.done_dates.map(String) : [],
         })),
-        conversations: sortConversations(conversationRows.map((row) => {
-          const updated = String(row.updated_at ?? new Date().toISOString());
-          return {
-            id: String(row.id),
-            title: String(row.title ?? 'Conversa'),
-            createdAt: String(row.created_at ?? updated),
-            updatedAt: updated,
-            lastAccessedAt: String(row.last_accessed_at ?? updated),
-            important: Boolean(row.important),
-            messageCount: Number(row.message_count ?? 0),
-            messages: [],
-            messagesLoaded: false,
-          };
-        })),
-        chatMessages: [],
-        activeConversationId: null,
+        conversations: sortConversations(conversations),
+        chatMessages: keepActive ? local.chatMessages : [],
+        activeConversationId: keepActive ? local.activeConversationId : null,
         loaded: true,
         syncStatus: 'synced',
         syncMessage: 'Seus dados estão sincronizados com a nuvem.',
@@ -253,7 +272,7 @@ export const useDataStore = create<DataState>()((set, get) => ({
     } catch (error) {
       if (get().userId !== user.id) return;
       set({ loaded: true, syncStatus: 'error', syncMessage: 'Não foi possível carregar seus dados. Verifique a conexão e se a migração do Supabase foi aplicada.' });
-      if (import.meta.env.DEV) console.warn('[nuvora] carregamento', error);
+      if (import.meta.env.DEV) console.warn('[nexo] carregamento', error);
     }
   },
 

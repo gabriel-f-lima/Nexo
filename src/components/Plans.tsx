@@ -4,6 +4,7 @@ import { Check } from 'lucide-react';
 import { LIMITS, loadPlanPrices, PLANS, startCheckout, type Interval, type PlanId, type PlanPrice } from '../lib/billing';
 import { formatMoney, type Currency } from '../lib/finance';
 import { notify } from '../lib/toast';
+import { useAuthStore } from '../store/auth';
 
 /** Escolha de plano: alterna mensal e anual, mostra os valores da Stripe e os benefícios. */
 export default function Plans() {
@@ -23,14 +24,21 @@ export default function Plans() {
   const find = (plan: PlanId, interval: Interval) =>
     prices?.find((p) => p.plan === plan && p.interval === interval) ?? null;
 
-  const choose = async (plan: PlanId) => {
-    setBusy(plan);
-    try {
-      await startCheckout(plan, cycle);
-    } catch (e) {
-      notify(e instanceof Error ? e.message : 'Não foi possível iniciar o pagamento.', 'error');
-      setBusy(null);
-    }
+  const requireAuth = useAuthStore((s) => s.requireAuth);
+
+  /** Só inicia a compra com a conta logada; sem login, abre a tela de entrada. */
+  const choose = (plan: PlanId) => {
+    requireAuth(() => {
+      void (async () => {
+        setBusy(plan);
+        try {
+          await startCheckout(plan, cycle);
+        } catch (e) {
+          notify(e instanceof Error ? e.message : 'Não foi possível iniciar o pagamento.', 'error');
+          setBusy(null);
+        }
+      })();
+    });
   };
 
   return (

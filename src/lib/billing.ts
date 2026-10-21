@@ -94,16 +94,29 @@ const readError = async (error: unknown): Promise<string> => {
   return 'Não foi possível concluir a operação. Tente novamente.';
 };
 
+/** Só sai do site para as páginas oficiais de pagamento da Stripe (checkout e portal). */
+const STRIPE_HOSTS = new Set(['checkout.stripe.com', 'billing.stripe.com']);
+const isStripeUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && STRIPE_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+};
+
 const callFunction = async (name: string, body: Record<string, unknown>): Promise<string> => {
   const { data, error } = await supabase.functions.invoke(name, { body });
   if (error) throw new Error(await readError(error));
   const url = (data as { url?: string } | null)?.url;
-  if (!url) throw new Error('Não foi possível abrir a página de pagamento.');
+  if (!url || !isStripeUrl(url)) throw new Error('Não foi possível abrir a página de pagamento.');
   return url;
 };
 
 /** Abre o checkout da Stripe para o plano e o intervalo escolhidos. */
 export const startCheckout = async (plan: PlanId, interval: Interval): Promise<void> => {
+  const { data } = await supabase.auth.getSession();
+  if (!data.session) throw new Error('Entre na sua conta para assinar um plano.');
   window.location.assign(await callFunction('stripe-checkout', { plan, interval }));
 };
 

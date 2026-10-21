@@ -12,7 +12,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error) {
-    console.error('[nuvora] erro na tela:', error);
+    console.error('[nexo] erro na tela:', error);
   }
 
   componentDidUpdate(prevProps: Props) {
@@ -28,7 +28,10 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="screen" style={{ paddingTop: 40 }}>
           <div className="card" style={{ display: 'grid', gap: 12 }}>
             <h2 style={{ fontSize: 20 }}>Algo deu errado nesta tela</h2>
-            <p className="text-2" style={{ fontSize: 13, wordBreak: 'break-word' }}>{this.state.error.message}</p>
+            {/* Detalhes técnicos só no desenvolvimento; em produção, uma mensagem simples. */}
+            <p className="text-2" style={{ fontSize: 13, wordBreak: 'break-word' }}>
+              {import.meta.env.DEV ? this.state.error.message : 'Recarregue a página. Se o problema continuar, fale com o suporte.'}
+            </p>
             <button type="button" className="btn btn-primary" onClick={() => window.location.reload()}>Recarregar</button>
           </div>
         </div>

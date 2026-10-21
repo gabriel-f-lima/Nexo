@@ -7,6 +7,12 @@ import { subscribeToasts, type Toast } from '../lib/toast';
 export const ConfirmHost = () => {
   const [request, setRequest] = useState<ConfirmRequest | null>(null);
   useEffect(() => subscribeConfirm(setRequest), []);
+  useEffect(() => {
+    if (!request) return undefined;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') resolveConfirm(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [request]);
 
   return (
     <AnimatePresence>
@@ -15,8 +21,8 @@ export const ConfirmHost = () => {
           key="confirm"
           className="backdrop"
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          animate={{ opacity: 1, pointerEvents: 'auto' }}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
           onMouseDown={(event) => { if (event.target === event.currentTarget) resolveConfirm(false); }}
           role="alertdialog"
           aria-modal="true"

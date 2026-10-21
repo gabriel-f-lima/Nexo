@@ -7,16 +7,16 @@ const TOPICS = [
   { icon: CalendarDays, title: 'Agenda', text: 'Abra Agenda para navegar pelo calendário e escolher uma data. Use o botão de adicionar para criar um compromisso; toque no dia para consultar os itens daquela data.' },
   { icon: CheckSquare, title: 'Rotina e metas', text: 'Crie hábitos em Rotina e selecione um dia da semana para conferir o histórico. Toque em uma meta para marcar como feita ou desfazer a conclusão.' },
   { icon: Sparkles, title: 'Assistente de IA', text: 'Faça perguntas gerais, peça uma pesquisa simples ou dê comandos para organizar tarefas, agenda e hábitos. Para criar ou alterar dados da conta, entre na sua conta.' },
-  { icon: Bell, title: 'Lembretes', text: 'No menu lateral, toque em Ative lembretes, escolha um horário e permita notificações. Na versão web, o aviso aparece enquanto o site estiver aberto no navegador.' },
+  { icon: Bell, title: 'Lembretes', text: 'No menu, toque em Notificações (ou abra Configurações) para ligar o lembrete diário e os avisos antes dos compromissos. Na versão web, os avisos aparecem enquanto o Nexo estiver aberto em uma aba do navegador, mesmo minimizada.' },
   { icon: Cloud, title: 'Conta e sincronização', text: 'Entre na sua conta para sincronizar tarefas, agenda, rotina e conversas. Em Configurações, confira o estado da nuvem. Se houver erro, verifique a conexão.' },
-  { icon: MessagesSquare, title: 'Conversas anteriores', text: 'Use o relógio no topo do assistente para abrir o histórico. Conversas sem acesso por 15 dias são removidas automaticamente; uma conversa marcada como importante não expira.' },
+  { icon: MessagesSquare, title: 'Conversas anteriores', text: 'Use o botão Histórico no topo do assistente para abrir as conversas anteriores; Nova conversa começa uma do zero. Conversas sem acesso por 15 dias são removidas automaticamente; uma conversa marcada como importante não expira.' },
 ];
 
 /** Guias rápidos e canal de suporte, como na tela de Ajuda do app. */
 export default function Ajuda() {
   return (
     <div className="screen">
-      <Header title="Ajuda" subtitle="Guias rápidos para usar o Nuvora" />
+      <Header title="Ajuda" subtitle="Guias rápidos para usar o Nexo" />
 
       <div className="screen-stack">
         <motion.div className="hero-card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -46,7 +46,7 @@ export default function Ajuda() {
           <div className="section-title" style={{ fontSize: 16 }}>Ainda precisa de ajuda?</div>
           <p className="text-2" style={{ fontSize: 13 }}>Fale com o suporte por e-mail.</p>
           <motion.a
-            href="mailto:g.ferreira.ldev@gmail.com?subject=Ajuda%20com%20o%20Nuvora"
+            href="mailto:g.ferreira.ldev@gmail.com?subject=Ajuda%20com%20o%20Nexo"
             className="btn btn-primary btn-sm"
             whileTap={{ scale: 0.97 }}
             style={{ textDecoration: 'none' }}

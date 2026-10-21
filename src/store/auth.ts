@@ -13,10 +13,12 @@ interface AuthState {
   promptVisible: boolean;
   /** Ação que o usuário tentou fazer e que roda logo após o login. */
   pendingAction: (() => void) | null;
+  /** Por que o login foi pedido, exibido no topo do modal. */
+  promptReason: string | null;
 
   init: () => () => void;
-  /** Executa a ação se houver sessão; senão abre o login e executa depois de entrar. */
-  requireAuth: (action?: () => void) => void;
+  /** Executa a ação se houver sessão; senão abre o login (com o motivo) e executa depois de entrar. */
+  requireAuth: (action?: () => void, reason?: string) => void;
   closePrompt: () => void;
 }
 
@@ -41,6 +43,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initializing: true,
   promptVisible: false,
   pendingAction: null,
+  promptReason: null,
 
   init: () => {
     let active = true;
@@ -61,7 +64,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (session) {
         const { pendingAction, promptVisible } = get();
         if (promptVisible || pendingAction) {
-          set({ promptVisible: false, pendingAction: null });
+          set({ promptVisible: false, pendingAction: null, promptReason: null });
           if (pendingAction) window.setTimeout(pendingAction, 0);
         }
       }
@@ -73,13 +76,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     };
   },
 
-  requireAuth: (action) => {
+  requireAuth: (action, reason) => {
     if (get().session) {
       action?.();
       return;
     }
-    set({ promptVisible: true, pendingAction: action ?? null });
+    set({ promptVisible: true, pendingAction: action ?? null, promptReason: reason ?? null });
   },
 
-  closePrompt: () => set({ promptVisible: false, pendingAction: null }),
+  closePrompt: () => set({ promptVisible: false, pendingAction: null, promptReason: null }),
 }));

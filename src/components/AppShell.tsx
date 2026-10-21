@@ -10,6 +10,9 @@ import { useAuthStore } from '../store/auth';
 import { useDataStore } from '../store/data';
 import { startReminderWatcher } from '../lib/reminder';
 
+/** Só caminhos internos do app vindos de notificações. */
+const isAppPath = (value: unknown): value is string => typeof value === 'string' && /^\/app(\/[a-z-]*)?$/.test(value);
+
 /** Casca do aplicativo: menu, botão do assistente, modais e a página atual. */
 export default function AppShell() {
   const location = useLocation();
@@ -21,6 +24,24 @@ export default function AppShell() {
     const id = window.setInterval(() => useDataStore.getState().pruneExpiredLocal(), 60 * 60 * 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  // Clique numa notificação: abre a tela indicada sem recarregar o app.
+  useEffect(() => {
+    const onWorkerMessage = (event: MessageEvent) => {
+      const data = event.data as { type?: string; url?: unknown } | null;
+      if (data?.type === 'nexo:navigate' && isAppPath(data.url)) navigate(data.url);
+    };
+    const onLocal = (event: Event) => {
+      const url = (event as CustomEvent).detail;
+      if (isAppPath(url)) navigate(url);
+    };
+    navigator.serviceWorker?.addEventListener('message', onWorkerMessage);
+    window.addEventListener('nexo:navigate', onLocal);
+    return () => {
+      navigator.serviceWorker?.removeEventListener('message', onWorkerMessage);
+      window.removeEventListener('nexo:navigate', onLocal);
+    };
+  }, [navigate]);
 
   if (initializing) {
     return (
@@ -36,16 +57,18 @@ export default function AppShell() {
     <div className="app-root">
       <Drawer />
 
-      <ErrorBoundary key={location.pathname}>
-        <motion.main
-          key={location.pathname}
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <Outlet />
-        </motion.main>
-      </ErrorBoundary>
+      <div className="app-main">
+        <ErrorBoundary key={location.pathname}>
+          <motion.main
+            key={location.pathname}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <Outlet />
+          </motion.main>
+        </ErrorBoundary>
+      </div>
 
       {!onChat ? (
         <motion.button
@@ -58,8 +81,9 @@ export default function AppShell() {
           transition={{ type: 'spring', stiffness: 420, damping: 22 }}
           onClick={() => navigate('/app/chat')}
           aria-label="Abrir assistente de IA"
+          title="Abrir assistente"
         >
-          <Sparkles size={26} />
+          <Sparkles size={24} />
         </motion.button>
       ) : null}
 

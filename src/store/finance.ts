@@ -149,7 +149,7 @@ export const useFinanceStore = create<FinanceState>()((set, get) => {
       } catch (error) {
         if (get().userId !== userId) return;
         set({ loaded: true });
-        if (import.meta.env.DEV) console.warn('[nuvora] financeiro', error);
+        if (import.meta.env.DEV) console.warn('[nexo] financeiro', error);
       }
     },
 

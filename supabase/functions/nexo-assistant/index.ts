@@ -1,8 +1,14 @@
-const corsHeaders = {
+const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json; charset=utf-8',
+};
+const corsHeaders = { ...cors, 'Content-Type': 'application/json; charset=utf-8' };
+const streamHeaders = {
+  ...cors,
+  'Content-Type': 'text/event-stream; charset=utf-8',
+  'Cache-Control': 'no-cache, no-transform',
+  'X-Accel-Buffering': 'no',
 };
 
 const appTools = [
@@ -10,7 +16,7 @@ const appTools = [
     type: 'function',
     function: {
       name: 'list_agenda_events',
-      description: 'Lista os compromissos do Nuvora. Usa a data local do utilizador; date vazio significa todos os compromissos.',
+      description: 'Lista os compromissos do Nexo. Usa a data local do utilizador; date vazio significa todos os compromissos.',
       parameters: {
         type: 'object',
         properties: { date: { type: 'string', description: 'Data local AAAA-MM-DD, ou string vazia para todos.' } },
@@ -259,20 +265,161 @@ const responseText = (output: unknown[]) => output
   .join('\n')
   .trim();
 
+const appToolNames = new Set(appTools.map((tool) => tool.function.name));
+
+/**
+ * Aceita só o que os aplicativos enviam: mensagens do usuário e do assistente, chamadas de ferramentas do app
+ * e os resultados delas. Papéis como "system" ou "developer" são recusados, para ninguém trocar as instruções.
+ */
+const sanitizeInputItem = (raw: unknown): Record<string, unknown> | null => {
+  const item = asRecord(raw);
+  if (item.type === 'function_call') {
+    if (typeof item.call_id !== 'string' || typeof item.name !== 'string' || typeof item.arguments !== 'string') return null;
+    if (!appToolNames.has(item.name)) return null;
+    const clean: Record<string, unknown> = { type: 'function_call', call_id: item.call_id, name: item.name, arguments: item.arguments };
+    if (typeof item.id === 'string') clean.id = item.id;
+    if (typeof item.status === 'string') clean.status = item.status;
+    return clean;
+  }
+  if (item.type === 'function_call_output') {
+    if (typeof item.call_id !== 'string' || typeof item.output !== 'string') return null;
+    return { type: 'function_call_output', call_id: item.call_id, output: item.output };
+  }
+  if ((item.type === undefined || item.type === 'message') && (item.role === 'user' || item.role === 'assistant') && typeof item.content === 'string') {
+    return { role: item.role, content: item.content };
+  }
+  return null;
+};
+
+/**
+ * Confirma no Supabase Auth que o token é de um usuário com sessão (a chave pública sozinha não basta).
+ * Usa a chave pública enviada pelo próprio app (a mesma que passou pela gateway) ou, sem ela, a do ambiente.
+ */
+const hasUserSession = async (authorization: string, clientKey: string | null): Promise<boolean | null> => {
+  const url = Deno.env.get('SUPABASE_URL');
+  const apiKey = clientKey || Deno.env.get('SUPABASE_ANON_KEY');
+  if (!url || !apiKey) return null;
+  try {
+    const response = await fetch(`${url}/auth/v1/user`, {
+      headers: { Authorization: authorization, apikey: apiKey },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return false;
+    const user = asRecord(await response.json());
+    return typeof user.id === 'string' && user.id.length > 0;
+  } catch {
+    return null;
+  }
+};
+
+const encoder = new TextEncoder();
+const sseEvent = (event: string, data: unknown) => encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+/**
+ * Repassa a resposta da OpenAI aos poucos (Server-Sent Events):
+ * "delta" com cada trecho de texto, "done" com o mesmo conteúdo da resposta JSON e "error" em caso de falha.
+ */
+const streamAssistantResponse = (upstream: Response, controller: AbortController, timeout: number): Response => {
+  const body = new ReadableStream<Uint8Array>({
+    async start(stream) {
+      const reader = upstream.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalOutput: unknown[] | null = null;
+      let failed = false;
+
+      const handleBlock = (block: string) => {
+        const data = block
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n');
+        if (!data || data === '[DONE]') return;
+        let event: Record<string, unknown>;
+        try {
+          event = asRecord(JSON.parse(data));
+        } catch {
+          return;
+        }
+        if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+          stream.enqueue(sseEvent('delta', { text: event.delta }));
+        } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+          const response = asRecord(event.response);
+          finalOutput = Array.isArray(response.output) ? response.output : [];
+        } else if (event.type === 'response.failed' || event.type === 'error') {
+          failed = true;
+        }
+      };
+
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+          let boundary = buffer.indexOf('\n\n');
+          while (boundary !== -1) {
+            handleBlock(buffer.slice(0, boundary));
+            buffer = buffer.slice(boundary + 2);
+            boundary = buffer.indexOf('\n\n');
+          }
+        }
+        buffer = (buffer + decoder.decode()).replace(/\r\n/g, '\n');
+        if (buffer.trim()) handleBlock(buffer);
+
+        if (finalOutput && !failed) {
+          const output: unknown[] = finalOutput;
+          stream.enqueue(sseEvent('done', { output, text: responseText(output), citations: citationList(output) }));
+        } else {
+          console.error('OpenAI Responses stream ended without a completed response');
+          stream.enqueue(sseEvent('error', { error: 'A OpenAI não conseguiu concluir o pedido. Tente novamente.' }));
+        }
+      } catch (error) {
+        const aborted = error instanceof Error && error.name === 'AbortError';
+        try {
+          stream.enqueue(sseEvent('error', {
+            error: aborted
+              ? 'O assistente demorou demasiado tempo a responder. Tente novamente.'
+              : 'A ligação com a OpenAI foi interrompida. Tente novamente.',
+          }));
+        } catch {
+          // O cliente já fechou a ligação.
+        }
+      } finally {
+        clearTimeout(timeout);
+        try {
+          stream.close();
+        } catch {
+          // Já fechado.
+        }
+      }
+    },
+    cancel() {
+      // O cliente saiu: não continua a gastar tokens.
+      clearTimeout(timeout);
+      controller.abort();
+    },
+  });
+  return new Response(body, { headers: streamHeaders });
+};
+
 Deno.serve(async (request: Request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (request.method !== 'POST') return jsonResponse({ error: 'Método não permitido.' }, 405);
 
-  // A Edge Gateway da Supabase deve manter verify_jwt = true; exigimos também um bearer de sessão.
-  if (!request.headers.get('Authorization')?.startsWith('Bearer ')) {
+  // A Edge Gateway da Supabase deve manter verify_jwt = true; além disso, o token tem de ser de um usuário com sessão.
+  const authorization = request.headers.get('Authorization') ?? '';
+  if (!authorization.startsWith('Bearer ')) {
     return jsonResponse({ error: 'Inicie sessão para utilizar o assistente.' }, 401);
   }
+  const session = await hasUserSession(authorization, request.headers.get('apikey'));
+  if (session === null) return jsonResponse({ error: 'Não foi possível confirmar a sua sessão. Tente novamente.' }, 503);
+  if (!session) return jsonResponse({ error: 'Inicie sessão para utilizar o assistente.' }, 401);
 
   const apiKey = Deno.env.get('OPENAI_API_KEY');
   if (!apiKey) return jsonResponse({ error: 'A chave OpenAI ainda não foi configurada nos segredos da função.' }, 500);
   const model = Deno.env.get('OPENAI_MODEL') || 'gpt-6-luna';
 
-  let body: { input?: unknown; context?: unknown; allowWebSearch?: unknown };
+  let body: { input?: unknown; context?: unknown; allowWebSearch?: unknown; stream?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -282,11 +429,15 @@ Deno.serve(async (request: Request) => {
   if (!Array.isArray(body.input) || body.input.length === 0 || body.input.length > 30) {
     return jsonResponse({ error: 'O histórico de conversa está vazio ou é demasiado longo.' }, 400);
   }
+  const input: Record<string, unknown>[] = [];
   for (const item of body.input) {
     if (!item || typeof item !== 'object') return jsonResponse({ error: 'Formato de conversa inválido.' }, 400);
     if (JSON.stringify(item).length > 12_000) return jsonResponse({ error: 'Uma mensagem excede o limite permitido.' }, 413);
+    const clean = sanitizeInputItem(item);
+    if (!clean) return jsonResponse({ error: 'Formato de conversa inválido.' }, 400);
+    input.push(clean);
   }
-  const inputSize = body.input.reduce((total, item) => total + JSON.stringify(item).length, 0);
+  const inputSize = input.reduce((total, item) => total + JSON.stringify(item).length, 0);
   if (inputSize > 40_000) return jsonResponse({ error: 'O contexto da conversa excede o limite económico permitido; comece uma conversa mais curta.' }, 413);
 
   const context = asRecord(body.context);
@@ -296,11 +447,17 @@ Deno.serve(async (request: Request) => {
   const localTime = typeof context.localTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(context.localTime)
     ? context.localTime
     : 'desconhecida';
-  const timezoneOffset = typeof context.timezoneOffsetMinutes === 'number' ? context.timezoneOffsetMinutes : 0;
+  const timezoneOffset = typeof context.timezoneOffsetMinutes === 'number'
+    && Number.isFinite(context.timezoneOffsetMinutes)
+    && Math.abs(context.timezoneOffsetMinutes) <= 14 * 60
+    ? context.timezoneOffsetMinutes
+    : 0;
   const allowWebSearch = body.allowWebSearch === true;
+  // Só a versão web pede a resposta aos poucos; o app mobile continua a receber JSON.
+  const stream = body.stream === true;
 
   const instructions = [
-    'És o assistente geral do Nuvora. Não te limites às funções do aplicativo: responde também a perguntas gerais de forma útil, natural e concisa. Responde em português do Brasil, salvo se o utilizador usar outra língua.',
+    'És o assistente geral do Nexo. Não te limites às funções do aplicativo: responde também a perguntas gerais de forma útil, natural e concisa. Responde em português do Brasil, salvo se o utilizador usar outra língua.',
     `Data local de hoje: ${today}. Hora local aproximada: ${localTime}. Desvio UTC em minutos do dispositivo: ${timezoneOffset}.`,
     'Usa o teu conhecimento para perguntas estáveis. Para notícias, acontecimentos recentes ou quando o utilizador pedir pesquisa, usa web_search numa pesquisa simples com contexto baixo; resume em poucas frases e inclui fontes clicáveis. Não inventes resultados nem fontes.',
     'As ferramentas do app continuam disponíveis para consultar ou alterar agenda, hábitos e tarefas. Não afirmes uma alteração antes de receber sucesso da ferramenta. Só apagues itens mediante pedido explícito e respeita a confirmação do aplicativo.',
@@ -316,11 +473,12 @@ Deno.serve(async (request: Request) => {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 45_000);
+  let streaming = false;
   try {
     const payload: Record<string, unknown> = {
       model,
       instructions,
-      input: body.input,
+      input,
       tools,
       tool_choice: 'auto',
       parallel_tool_calls: false,
@@ -332,6 +490,7 @@ Deno.serve(async (request: Request) => {
       payload.max_tool_calls = 1;
       payload.include = ['web_search_call.action.sources'];
     }
+    if (stream) payload.stream = true;
 
     const response = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -345,6 +504,12 @@ Deno.serve(async (request: Request) => {
       if (response.status === 401) return jsonResponse({ error: 'A chave OpenAI foi rejeitada. Verifique o segredo OPENAI_API_KEY no Supabase.' }, 502);
       if (response.status === 429) return jsonResponse({ error: 'A OpenAI limitou este pedido. Tente novamente mais tarde.' }, 429);
       return jsonResponse({ error: 'A OpenAI não conseguiu concluir o pedido. Verifique o modelo e os limites da API.' }, 502);
+    }
+
+    if (stream && response.body) {
+      // A partir daqui o tempo limite é controlado pelo stream, que o limpa ao terminar.
+      streaming = true;
+      return streamAssistantResponse(response, controller, timeout);
     }
 
     const result = await response.json();
@@ -361,6 +526,6 @@ Deno.serve(async (request: Request) => {
     console.error('Assistant Responses request failed');
     return jsonResponse({ error: 'Não foi possível contactar a OpenAI neste momento.' }, 502);
   } finally {
-    clearTimeout(timeout);
+    if (!streaming) clearTimeout(timeout);
   }
 });

@@ -8,7 +8,7 @@ export default function Termos() {
   const [showTop, setShowTop] = useState(false);
 
   useEffect(() => {
-    document.title = 'Termos de Uso e Privacidade · Nuvora';
+    document.title = 'Termos de Uso e Privacidade · Nexo';
 
     const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.legal #toc a'));
     const targets = links
@@ -32,7 +32,7 @@ export default function Termos() {
     return () => {
       observer.disconnect();
       window.removeEventListener('scroll', onScroll);
-      document.title = 'Nuvora · Seu assistente pessoal';
+      document.title = 'Nexo · Seu assistente pessoal';
     };
   }, []);
 
@@ -42,7 +42,7 @@ export default function Termos() {
         <div className="legal-top-inner">
           <Link to="/" className="brand">
             <img src="/nexo-logo.png" alt="" width={34} height={34} />
-            <span>Nuvora</span>
+            <span>Nexo</span>
           </Link>
           <nav className="row gap-sm">
             <Link to="/" className="legal-back">Início</Link>
@@ -55,7 +55,7 @@ export default function Termos() {
 
       <footer className="legal-footer">
         <div className="legal-footer-inner">
-          <span>© 2026 Nuvora. Todos os direitos reservados.</span>
+          <span>© 2026 Nexo. Todos os direitos reservados.</span>
           <span className="footer-links">
             <Link to="/">Início</Link>
             <Link to="/app">Abrir o app</Link>

@@ -6,8 +6,16 @@ import { authService } from '../lib/auth';
 import { translateAuthError } from '../lib/authErrors';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** Contas antigas podem ter senha de 6 caracteres; contas novas precisam de uma senha mais forte. */
 const MIN_PASSWORD = 6;
+const MIN_NEW_PASSWORD = 8;
 const MIN_CODE = 6;
+
+const newPasswordError = (password: string): string | null => {
+  if (password.length < MIN_NEW_PASSWORD) return `A senha precisa ter pelo menos ${MIN_NEW_PASSWORD} caracteres.`;
+  if (!/[A-Za-zÀ-ÿ]/.test(password) || !/\d/.test(password)) return 'Use letras e números na senha.';
+  return null;
+};
 const COOLDOWN = 60;
 
 type Mode = 'signIn' | 'signUp';
@@ -19,6 +27,13 @@ export default function AuthModal() {
   const visible = useAuthStore((s) => s.promptVisible);
   const close = useAuthStore((s) => s.closePrompt);
 
+  useEffect(() => {
+    if (!visible) return undefined;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') close(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visible, close]);
+
   return (
     <AnimatePresence>
       {visible ? (
@@ -26,8 +41,8 @@ export default function AuthModal() {
           key="auth-backdrop"
           className="backdrop"
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          animate={{ opacity: 1, pointerEvents: 'auto' }}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
           onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}
         >
           <motion.div
@@ -38,7 +53,7 @@ export default function AuthModal() {
             transition={{ type: 'spring', stiffness: 360, damping: 32 }}
             role="dialog"
             aria-modal="true"
-            aria-label="Entrar no Nuvora"
+            aria-label="Entrar no Nexo"
           >
             <AuthPanel onClose={close} />
           </motion.div>
@@ -49,6 +64,7 @@ export default function AuthModal() {
 }
 
 function AuthPanel({ onClose }: { onClose: () => void }) {
+  const reason = useAuthStore((s) => s.promptReason);
   const [step, setStep] = useState<Step>('form');
   const [mode, setMode] = useState<Mode>('signIn');
   const [name, setName] = useState('');
@@ -86,7 +102,13 @@ function AuthPanel({ onClose }: { onClose: () => void }) {
     clear();
     const clean = email.trim().toLowerCase();
     if (!EMAIL_REGEX.test(clean)) { setError('Digite um e-mail válido.'); return; }
-    if (password.length < MIN_PASSWORD) { setError(`A senha precisa ter pelo menos ${MIN_PASSWORD} caracteres.`); return; }
+    if (isSignUp) {
+      const weak = newPasswordError(password);
+      if (weak) { setError(weak); return; }
+    } else if (password.length < MIN_PASSWORD) {
+      setError(`A senha precisa ter pelo menos ${MIN_PASSWORD} caracteres.`);
+      return;
+    }
 
     setLoading('email');
     try {
@@ -238,15 +260,16 @@ function AuthPanel({ onClose }: { onClose: () => void }) {
         <X size={17} />
       </button>
       <div className="auth-hero">
-        <div className="icon-btn" style={{ width: 52, height: 52 }}>
-          <Sparkles size={24} />
-        </div>
-        <h2>{isSignUp ? 'Criar conta' : 'Entrar no Nuvora'}</h2>
+        <img className="auth-logo" src="/nexo-logo.png" alt="" width={56} height={56} />
+        <h2>{isSignUp ? 'Criar conta' : 'Entrar no Nexo'}</h2>
         <p>
           {isSignUp
             ? 'Crie sua conta para salvar sua agenda e rotina.'
             : 'Entre para usar o assistente, a agenda e a rotina.'}
         </p>
+        {reason ? (
+          <p className="auth-reason" role="note"><Sparkles size={15} /> {reason}</p>
+        ) : null}
       </div>
 
       <motion.button
@@ -263,7 +286,7 @@ function AuthPanel({ onClose }: { onClose: () => void }) {
       <div className="divider">ou</div>
 
       {isSignUp ? (
-        <input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="Nome" autoComplete="name" disabled={busy} />
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="Nome" aria-label="Nome" autoComplete="name" disabled={busy} />
       ) : null}
       <input
         className="input"
@@ -272,8 +295,10 @@ function AuthPanel({ onClose }: { onClose: () => void }) {
         onChange={(e) => setEmail(e.target.value)}
         maxLength={254}
         placeholder="E-mail"
+        aria-label="E-mail"
         autoComplete="email"
         autoCapitalize="none"
+        spellCheck={false}
         disabled={busy}
       />
       <div className="password-wrap">
@@ -284,6 +309,7 @@ function AuthPanel({ onClose }: { onClose: () => void }) {
           onChange={(e) => setPassword(e.target.value)}
           maxLength={128}
           placeholder="Senha"
+          aria-label="Senha"
           autoComplete={isSignUp ? 'new-password' : 'current-password'}
           disabled={busy}
         />
@@ -296,6 +322,7 @@ function AuthPanel({ onClose }: { onClose: () => void }) {
           {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
         </button>
       </div>
+      {isSignUp ? <p className="field-hint">Use pelo menos {MIN_NEW_PASSWORD} caracteres, com letras e números.</p> : null}
 
       {messages}
 

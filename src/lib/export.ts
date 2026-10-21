@@ -1,4 +1,3 @@
-import * as XLSX from 'xlsx';
 import type { Goal, Transaction, Category } from '../store/finance';
 import { formatMoney, type Currency } from './finance';
 import { formatLongDate, parseDateKey } from './dates';
@@ -23,8 +22,9 @@ export const toExportRows = (items: Transaction[], categories: Category[]): Expo
   }));
 
 const csvCell = (value: string | number): string => {
-  const text = String(value);
-  return /[;"\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  // Texto que começa com = + - @ viraria fórmula no Excel: o apóstrofo faz a célula ser lida como texto.
+  const text = typeof value === 'string' && /^[=+\-@\t\r]/.test(value) ? `'${value}` : String(value);
+  return /[;"\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
 const triggerDownload = (blob: Blob, fileName: string) => {
@@ -53,8 +53,9 @@ export const downloadCsv = (rows: ExportRow[], fileName: string): void => {
   triggerDownload(new Blob([content], { type: 'text/csv;charset=utf-8' }), fileName);
 };
 
-/** Planilha .xlsx com lançamentos e metas. */
-export const downloadXlsx = (rows: ExportRow[], goals: Goal[], fileName: string): void => {
+/** Planilha .xlsx com lançamentos e metas. A biblioteca de planilhas só é carregada quando usada. */
+export const downloadXlsx = async (rows: ExportRow[], goals: Goal[], fileName: string): Promise<void> => {
+  const XLSX = await import('xlsx');
   const workbook = XLSX.utils.book_new();
   const transactionsSheet = XLSX.utils.json_to_sheet(rows.map((r) => ({
     Data: r.data,

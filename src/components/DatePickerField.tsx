@@ -10,7 +10,7 @@ const formatBR = (key: string): string => {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
 };
 
-/** Campo de data com o calendário do Nuvora. Dias antes de `min` ficam desabilitados. */
+/** Campo de data com o calendário do Nexo. Dias antes de `min` ficam desabilitados. */
 export default function DatePickerField({
   value,
   onChange,

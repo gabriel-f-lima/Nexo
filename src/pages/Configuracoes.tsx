@@ -11,6 +11,7 @@ import { confirmAction } from '../lib/confirm';
 import { notify } from '../lib/toast';
 import { displayName } from '../lib/user';
 import DeleteAccountModal from '../components/DeleteAccountModal';
+import NotificationSettings from '../components/NotificationSettings';
 import PlanCard from '../components/PlanCard';
 
 /** Conta, sincronização e segurança, como a tela de Configurações do app. */
@@ -47,6 +48,7 @@ export default function Configuracoes() {
     event.preventDefault();
     setPasswordError('');
     if (newPassword.length < 8) { setPasswordError('A nova senha deve ter pelo menos 8 caracteres.'); return; }
+    if (!/[A-Za-zÀ-ÿ]/.test(newPassword) || !/\d/.test(newPassword)) { setPasswordError('Use letras e números na nova senha.'); return; }
     if (newPassword !== confirmPassword) { setPasswordError('As senhas não coincidem.'); return; }
     setSaving(true);
     try {
@@ -80,7 +82,7 @@ export default function Configuracoes() {
 
   return (
     <div className="screen">
-      <Header title="Configurações" subtitle="Conta e segurança" />
+      <Header title="Configurações" subtitle="Conta, notificações e segurança" />
 
       <div className="screen-stack">
         <div className="eyebrow" style={{ color: 'var(--text-2)' }}>A sua conta</div>
@@ -147,7 +149,7 @@ export default function Configuracoes() {
                     exit={{ height: 0, opacity: 0 }}
                     style={{ overflow: 'hidden', display: 'grid', gap: 10 }}
                   >
-                    <p className="text-2" style={{ fontSize: 12 }}>Use pelo menos 8 caracteres.</p>
+                    <p className="text-2" style={{ fontSize: 12 }}>Use pelo menos 8 caracteres, com letras e números.</p>
                     <input className="input" type={showPassword ? 'text' : 'password'} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Nova senha" autoComplete="new-password" />
                     <input className="input" type={showPassword ? 'text' : 'password'} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirmar nova senha" autoComplete="new-password" />
                     <button type="button" className="link-btn" style={{ justifySelf: 'start', padding: 0 }} onClick={() => setShowPassword((v) => !v)}>
@@ -166,6 +168,11 @@ export default function Configuracoes() {
               </motion.button>
             </>
           ) : null}
+        </div>
+
+        <div className="eyebrow" style={{ color: 'var(--text-2)' }}>Notificações</div>
+        <div className="card">
+          <NotificationSettings />
         </div>
 
         <div className="eyebrow" style={{ color: 'var(--text-2)' }}>Privacidade</div>

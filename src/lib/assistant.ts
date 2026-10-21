@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, supabasePublishableKey, supabaseUrl } from './supabase';
 import { formatTime, toISODate } from './dates';
 import { confirmAction } from './confirm';
 import { useDataStore, type ChatMessage } from '../store/data';
@@ -296,21 +296,133 @@ const withSources = (answer: string, citations: Citation[]): string => {
   return `${answer || 'Encontrei estas informações.'}\n\nFontes consultadas:\n${list}`;
 };
 
-const functionErrorMessage = async (error: unknown, data: unknown): Promise<string> => {
-  let message = (data as { error?: string } | null)?.error;
-  const response = (error as { context?: Response } | null)?.context;
-  if (!message && response) {
-    try {
-      message = (await response.clone().json() as { error?: string }).error;
-    } catch {
-      // Resposta sem JSON legível.
-    }
+type AssistantPayload = { output?: unknown; text?: string; citations?: unknown } | null;
+
+const FUNCTION_URL = `${supabaseUrl}/functions/v1/nexo-assistant`;
+/** Um pouco acima do limite da função (45 s), para a mensagem de erro dela chegar primeiro. */
+const ROUND_TIMEOUT_MS = 60_000;
+const CONNECTION_ERROR = 'Não consegui ligar ao assistente. Confirme a configuração da função Supabase e tente novamente.';
+
+const errorFromResponse = async (response: Response): Promise<Error> => {
+  let message: string | undefined;
+  try {
+    message = ((await response.json()) as { error?: string }).error;
+  } catch {
+    // Resposta sem JSON legível.
   }
-  return message ?? 'Não consegui ligar ao assistente. Confirme a configuração da função Supabase e tente novamente.';
+  return new Error(typeof message === 'string' && message ? message : CONNECTION_ERROR);
 };
 
+/** Lê os eventos enviados pela função: "delta" (trecho de texto), "done" (resultado final) e "error". */
+const readEventStream = async (body: ReadableStream<Uint8Array>, onDelta: (chunk: string) => void): Promise<AssistantPayload> => {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: AssistantPayload | undefined;
+
+  const handleBlock = (block: string) => {
+    let event = 'message';
+    const data: string[] = [];
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+    }
+    if (!data.length) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(data.join('\n'));
+    } catch {
+      return;
+    }
+    if (!isRecord(parsed)) return;
+    if (event === 'delta' && typeof parsed.text === 'string') onDelta(parsed.text);
+    else if (event === 'done') result = parsed as AssistantPayload;
+    else if (event === 'error') throw new Error(typeof parsed.error === 'string' && parsed.error ? parsed.error : CONNECTION_ERROR);
+  };
+
+  try {
+    while (result === undefined) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1 && result === undefined) {
+        handleBlock(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
+    if (result === undefined) {
+      buffer = (buffer + decoder.decode()).replace(/\r\n/g, '\n');
+      if (buffer.trim()) handleBlock(buffer);
+    }
+  } finally {
+    reader.cancel().catch(() => undefined);
+  }
+
+  if (result === undefined) throw new Error('A resposta do assistente foi interrompida. Tente novamente.');
+  return result;
+};
+
+/**
+ * Uma etapa da conversa com a função "nexo-assistant". Pede a resposta aos poucos (streaming);
+ * se a função publicada ainda responder só em JSON, o resultado é o mesmo, apenas chega de uma vez.
+ */
+const requestRound = async (body: Record<string, unknown>, onDelta: (chunk: string) => void): Promise<AssistantPayload> => {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error('Entre na sua conta para usar o assistente.');
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), ROUND_TIMEOUT_MS);
+  try {
+    let response: Response;
+    try {
+      response = await fetch(FUNCTION_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: supabasePublishableKey,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream, application/json',
+        },
+        body: JSON.stringify({ ...body, stream: true }),
+        signal: controller.signal,
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+      });
+    } catch {
+      throw new Error(controller.signal.aborted
+        ? 'O assistente demorou demais para responder. Tente novamente.'
+        : 'Sem conexão com o assistente. Verifique a internet e tente novamente.');
+    }
+
+    if (!response.ok) throw await errorFromResponse(response);
+    const type = response.headers.get('content-type') ?? '';
+    if (type.includes('text/event-stream') && response.body) {
+      try {
+        return await readEventStream(response.body, onDelta);
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error('O assistente demorou demais para responder. Tente novamente.');
+        throw error;
+      }
+    }
+    return (await response.json()) as AssistantPayload;
+  } finally {
+    window.clearTimeout(timer);
+  }
+};
+
+export interface SendMessageOptions {
+  /**
+   * Recebe o texto parcial da resposta enquanto ela chega. Volta a '' quando o assistente
+   * troca o texto por uma ação do app (agenda, tarefas...), antes de responder de novo.
+   */
+  onText?: (text: string) => void;
+}
+
 export const aiService = {
-  async sendMessage(history: ChatMessage[]): Promise<string> {
+  async sendMessage(history: ChatMessage[], options: SendMessageOptions = {}): Promise<string> {
     const now = new Date();
     const context = {
       today: toISODate(now),
@@ -331,12 +443,12 @@ export const aiService = {
         throw new Error('O assistente acumulou etapas demais neste pedido. Tente dividir a solicitação ou iniciar uma nova conversa.');
       }
 
-      const { data, error } = await supabase.functions.invoke('nexo-assistant', {
-        body: { input, context, allowWebSearch: !webSearchUsed },
+      let roundText = '';
+      const payload = await requestRound({ input, context, allowWebSearch: !webSearchUsed }, (chunk) => {
+        roundText += chunk;
+        options.onText?.(roundText);
       });
-      if (error) throw new Error(await functionErrorMessage(error, data));
 
-      const payload = data as { output?: unknown; text?: string; citations?: unknown } | null;
       const output = Array.isArray(payload?.output) ? (payload.output.filter(isRecord) as ResponseItem[]) : [];
       if (Array.isArray(payload?.citations)) {
         for (const raw of payload.citations) {
@@ -357,6 +469,8 @@ export const aiService = {
       if (!calls.length) {
         return withSources(typeof payload?.text === 'string' ? payload.text.trim() : '', citations);
       }
+      // O texto desta etapa dá lugar às ações; a resposta final vem na próxima.
+      if (roundText) options.onText?.('');
       if (input.length + calls.length * 2 > MAX_INPUT_ITEMS) {
         throw new Error('O assistente acumulou etapas demais neste pedido. Tente dividir a solicitação ou iniciar uma nova conversa.');
       }

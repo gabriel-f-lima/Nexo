@@ -156,7 +156,7 @@ export default function Agenda() {
         <div className="row between" style={{ alignItems: 'center' }}>
           <div style={{ display: 'grid', gap: 3 }}>
             <span className="section-title">Compromissos</span>
-            <span className="text-2" style={{ fontSize: 13, textTransform: 'capitalize' }}>{formatLongDate(parseDateKey(selectedDate))}</span>
+            <span className="text-2" style={{ fontSize: 13 }}>{formatLongDate(parseDateKey(selectedDate))}</span>
           </div>
           <motion.button type="button" className="icon-btn" whileTap={{ scale: 0.9 }} whileHover={{ scale: 1.05 }} onClick={openForm} aria-label="Adicionar compromisso" style={{ background: 'var(--accent)', color: 'var(--bg)', border: 0 }}>
             <Plus size={20} />
@@ -204,7 +204,7 @@ export default function Agenda() {
 
       <Modal open={formOpen} onClose={() => setFormOpen(false)} title="Novo compromisso">
         <form onSubmit={save} style={{ display: 'grid', gap: 12 }}>
-          <p style={{ color: 'var(--accent)', fontSize: 13, textTransform: 'capitalize' }}>{formatLongDate(parseDateKey(selectedDate))}</p>
+          <p style={{ color: 'var(--accent)', fontSize: 13 }}>{formatLongDate(parseDateKey(selectedDate))}</p>
           <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título" maxLength={80} autoFocus />
           <input className="input" type="time" value={time} onChange={(e) => setTime(e.target.value)} aria-label="Hora" />
           <input className="input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Local (opcional)" maxLength={80} />

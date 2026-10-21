@@ -69,7 +69,7 @@ export default function PlanCard({ userId }: { userId: string }) {
             <div className="row gap-md">
               <div className="icon-btn sm"><Crown size={16} /></div>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>{planName ? `Plano ${planName}` : 'Plano Nuvora'}</div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{planName ? `Plano ${planName}` : 'Plano Nexo'}</div>
                 <div className="text-2" style={{ fontSize: 12 }}>{label}</div>
               </div>
             </div>
