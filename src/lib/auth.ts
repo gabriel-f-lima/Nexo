@@ -55,7 +55,8 @@ export const authService = {
   async signInWithGoogle(): Promise<void> {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: appRedirectUrl() },
+      // select_account: o Google sempre mostra a escolha de conta, em vez de entrar direto na última usada.
+      options: { redirectTo: appRedirectUrl(), queryParams: { prompt: 'select_account' } },
     });
     if (error) throw error;
   },
