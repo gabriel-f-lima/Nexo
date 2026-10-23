@@ -1,56 +1,48 @@
 // Abre o portal de cliente da Stripe (trocar cartão, ver faturas, cancelar).
-import Stripe from 'npm:stripe@17.4.0';
-import { createClient } from 'npm:@supabase/supabase-js@2';
+// Sessão verificada no servidor, rate limit e URL de retorno fixa. STRIPE_PORTAL_CONFIGURATION (opcional)
+// fixa qual configuração do portal é usada, para que ninguém troque para planos fora da lista.
+import { appOrigin, clientIp, errorResponse, http, type Http } from '../_shared/http.ts';
+import { adminClient, ipKey, rateLimit, requireUser } from '../_shared/security.ts';
+import { stripeClient } from '../_shared/stripe.ts';
 
-const headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json; charset=utf-8',
-};
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
+const SOURCE = 'stripe-portal';
 
-const handle = async (req: Request): Promise<Response> => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers });
-  if (req.method !== 'POST') return json({ error: 'Método não permitido.' }, 405);
+const handle = async (req: Request, h: Http): Promise<Response> => {
+  if (req.method === 'OPTIONS') return h.preflight();
+  if (!h.originAllowed) return h.json({ error: 'Origem não permitida.' }, 403);
+  if (req.method !== 'POST') return h.json({ error: 'Método não permitido.' }, 405);
 
-  const url = Deno.env.get('SUPABASE_URL') ?? '';
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
-  const appUrl = (Deno.env.get('APP_URL') ?? '').replace(/\/$/, '');
+  const app = appOrigin();
+  const admin = adminClient();
+  const ip = clientIp(req);
 
-  const token = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '');
-  if (!token) return json({ error: 'Sessão ausente.' }, 401);
-  if (!stripeKey || !appUrl) return json({ error: 'Pagamentos não configurados no servidor.' }, 500);
+  await rateLimit(admin, [{ bucket: `portal:ip:${await ipKey(ip)}`, limit: 30, windowSeconds: 600, blockSeconds: 1800 }], { source: SOURCE, ip });
+  const user = await requireUser(req, admin);
+  await rateLimit(admin, [{ bucket: `portal:user:${user.id}`, limit: 10, windowSeconds: 600, blockSeconds: 900 }], { source: SOURCE, ip, userId: user.id });
 
-  const userClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data: userData, error: userError } = await userClient.auth.getUser(token);
-  if (userError || !userData.user) return json({ error: 'Sessão inválida.' }, 401);
-
-  const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data } = await admin
+  const { data, error } = await admin
     .from('nexo_subscriptions')
     .select('stripe_customer_id')
-    .eq('user_id', userData.user.id)
+    .eq('user_id', user.id)
     .maybeSingle();
-  if (!data?.stripe_customer_id) return json({ error: 'Você ainda não tem uma assinatura.' }, 404);
+  if (error) throw new Error(`nexo_subscriptions: ${error.message}`);
+  if (!data?.stripe_customer_id) return h.json({ error: 'Você ainda não tem uma assinatura.', code: 'no_customer' }, 404);
 
-  const stripe = new Stripe(stripeKey, { httpClient: Stripe.createFetchHttpClient() });
-  const portal = await stripe.billingPortal.sessions.create({
-    customer: data.stripe_customer_id,
-    return_url: `${appUrl}/app/configuracoes`,
+  const configuration = Deno.env.get('STRIPE_PORTAL_CONFIGURATION')?.trim();
+  const portal = await stripeClient().billingPortal.sessions.create({
+    customer: data.stripe_customer_id as string,
+    return_url: `${app}/app/configuracoes`,
+    ...(configuration ? { configuration } : {}),
   });
 
-  return json({ url: portal.url });
+  return h.json({ url: portal.url });
 };
 
-// Qualquer falha inesperada vira uma resposta JSON com CORS, em vez de quebrar a função.
 Deno.serve(async (req) => {
+  const h = http(req);
   try {
-    return await handle(req);
+    return await handle(req, h);
   } catch (error) {
-    console.error('stripe-portal', error);
-    return json({ error: 'Não foi possível abrir o portal. Tente novamente.' }, 500);
+    return errorResponse(h, SOURCE, error);
   }
 });

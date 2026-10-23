@@ -1,46 +1,53 @@
 // Devolve os valores atuais dos preços direto da Stripe, para a tela de planos mostrar o que será cobrado.
-import Stripe from 'npm:stripe@17.4.0';
+// Pública (a tela de planos aparece antes do login), com rate limit por IP e cache curto para poupar a Stripe.
+import { clientIp, errorResponse, http, type Http } from '../_shared/http.ts';
+import { adminClient, ipKey, rateLimit } from '../_shared/security.ts';
+import { PRICE_ENV, stripeClient, type Interval, type PlanId } from '../_shared/stripe.ts';
 
-const headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json; charset=utf-8',
+const SOURCE = 'stripe-prices';
+const CACHE_MS = 5 * 60 * 1000;
+
+interface PlanPrice { plan: PlanId; interval: Interval; amountCents: number; currency: string }
+let cache: { at: number; prices: PlanPrice[] } | null = null;
+
+const loadPrices = async (): Promise<PlanPrice[]> => {
+  if (cache && Date.now() - cache.at < CACHE_MS) return cache.prices;
+  const stripe = stripeClient();
+  const entries = await Promise.all(
+    Object.entries(PRICE_ENV).map(async ([key, envName]): Promise<PlanPrice | null> => {
+      const id = Deno.env.get(envName)?.trim();
+      if (!id) return null;
+      const [plan, interval] = key.split('_') as [PlanId, Interval];
+      const price = await stripe.prices.retrieve(id);
+      // Só mostra preço que o checkout de fato cobraria: ativo, recorrente e no intervalo certo.
+      const expected = interval === 'yearly' ? 'year' : 'month';
+      if (!price.active || price.unit_amount == null || price.recurring?.interval !== expected || price.recurring.interval_count !== 1) {
+        console.error(SOURCE, 'preço inválido ou inativo', envName);
+        return null;
+      }
+      return { plan, interval, amountCents: price.unit_amount, currency: price.currency.toUpperCase() };
+    }),
+  );
+  const prices = entries.filter((entry): entry is PlanPrice => entry !== null);
+  cache = { at: Date.now(), prices };
+  return prices;
 };
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
 
-// Mesma ordem de chaves do stripe-checkout: plano_intervalo -> nome do secret.
-const PRICE_ENV: Record<string, string> = {
-  basico_monthly: 'STRIPE_PRICE_BASICO_MONTHLY',
-  basico_yearly: 'STRIPE_PRICE_BASICO_YEARLY',
-  pro_monthly: 'STRIPE_PRICE_PRO_MONTHLY',
-  pro_yearly: 'STRIPE_PRICE_PRO_YEARLY',
+const handle = async (req: Request, h: Http): Promise<Response> => {
+  if (req.method === 'OPTIONS') return h.preflight();
+  if (!h.originAllowed) return h.json({ error: 'Origem não permitida.' }, 403);
+  if (req.method !== 'POST' && req.method !== 'GET') return h.json({ error: 'Método não permitido.' }, 405);
+
+  const ip = clientIp(req);
+  await rateLimit(adminClient(), [{ bucket: `prices:ip:${await ipKey(ip)}`, limit: 60, windowSeconds: 600, blockSeconds: 600 }], { source: SOURCE, ip });
+  return h.json({ prices: await loadPrices() });
 };
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers });
+  const h = http(req);
   try {
-    const stripeKey = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
-    if (!stripeKey) return json({ error: 'Pagamentos não configurados no servidor.' }, 500);
-    const stripe = new Stripe(stripeKey, { httpClient: Stripe.createFetchHttpClient() });
-
-    const entries = await Promise.all(
-      Object.entries(PRICE_ENV).map(async ([key, envName]) => {
-        const id = Deno.env.get(envName);
-        if (!id) return null;
-        const price = await stripe.prices.retrieve(id);
-        const [plan, interval] = key.split('_');
-        return {
-          plan,
-          interval,
-          amountCents: price.unit_amount ?? 0,
-          currency: (price.currency ?? 'brl').toUpperCase(),
-        };
-      }),
-    );
-    return json({ prices: entries.filter(Boolean) });
+    return await handle(req, h);
   } catch (error) {
-    console.error('stripe-prices', error);
-    return json({ error: 'Não foi possível carregar os preços.' }, 500);
+    return errorResponse(h, SOURCE, error);
   }
 });

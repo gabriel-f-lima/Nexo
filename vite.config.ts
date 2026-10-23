@@ -17,20 +17,25 @@ const previewHeaders = Object.fromEntries(
     .map((h) => [h.key, h.key === 'Content-Security-Policy' ? h.value.replace(/;\s*upgrade-insecure-requests/, '') : h.value]),
 );
 
-/** Política de conteúdo: só o próprio site e o projeto Supabase configurado no .env. */
-const contentSecurityPolicy = (supabaseUrl: string): string => {
+/** Endereço do Cloudflare Turnstile (script e iframe da verificação anti-robô). */
+const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+
+/**
+ * Política de conteúdo: só o próprio site e o projeto Supabase configurado no .env. Com VITE_TURNSTILE_SITE_KEY,
+ * libera também o Turnstile. A Stripe não entra: o pagamento abre em checkout.stripe.com, fora do site.
+ */
+const contentSecurityPolicy = (supabaseUrl: string, captcha: boolean): string => {
   const origin = new URL(supabaseUrl).origin;
   return [
     "default-src 'self'",
-    "script-src 'self'",
+    `script-src 'self'${captcha ? ` ${TURNSTILE_ORIGIN}` : ''}`,
     "style-src 'self' 'unsafe-inline'",
-    // https: libera as imagens externas que o assistente mostra nas respostas.
-    "img-src 'self' data: blob: https:",
+    "img-src 'self' data: blob:",
     "font-src 'self' data:",
     `connect-src 'self' ${origin} ${origin.replace(/^http/, 'ws')}`,
     "worker-src 'self'",
     "manifest-src 'self'",
-    "frame-src 'none'",
+    `frame-src ${captcha ? TURNSTILE_ORIGIN : "'none'"}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",
@@ -38,7 +43,7 @@ const contentSecurityPolicy = (supabaseUrl: string): string => {
 };
 
 /** No build, coloca a CSP no index.html. Assim ela vale em qualquer hospedagem (no dev atrapalharia o recarregamento). */
-const securityMeta = (supabaseUrl: string | undefined): Plugin => ({
+const securityMeta = (supabaseUrl: string | undefined, captcha: boolean): Plugin => ({
   name: 'nexo-security-meta',
   apply: 'build',
   transformIndexHtml(html) {
@@ -46,17 +51,18 @@ const securityMeta = (supabaseUrl: string | undefined): Plugin => ({
     const charset = '<meta charset="UTF-8" />';
     if (!html.includes(charset)) throw new Error('index.html sem <meta charset="UTF-8" />: não é possível inserir a política de segurança.');
     // Logo depois do charset, antes de qualquer script ou estilo.
-    return html.replace(charset, `${charset}\n    <meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(supabaseUrl)}" />`);
+    return html.replace(charset, `${charset}\n    <meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy(supabaseUrl, captcha)}" />`);
   },
 });
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   return {
-    plugins: [react(), securityMeta(env.VITE_SUPABASE_URL)],
+    plugins: [react(), securityMeta(env.VITE_SUPABASE_URL, Boolean(env.VITE_TURNSTILE_SITE_KEY?.trim()))],
     define: { __APP_VERSION__: JSON.stringify(pkg.version) },
     server: { port: 5173 },
     preview: { headers: previewHeaders },
-    build: { sourcemap: false },
+    // A planilha (SheetJS, ~500 kB) fica num arquivo à parte, baixado só ao exportar: o aviso de tamanho não se aplica a ela.
+    build: { sourcemap: false, chunkSizeWarningLimit: 560 },
   };
 });

@@ -1,111 +1,153 @@
-// Cria a sessão de checkout de assinatura (mensal ou anual), com impostos e faturas automáticos.
-import Stripe from 'npm:stripe@17.4.0';
-import { createClient } from 'npm:@supabase/supabase-js@2';
+// Cria a sessão de checkout de assinatura (mensal ou anual).
+// Proteções: sessão verificada no servidor, e-mail confirmado, rate limit por IP e por usuário, captcha opcional,
+// preço só da lista do servidor, um cliente da Stripe por usuário, uma sessão aberta por vez (reaproveitada)
+// e chaves de idempotência na Stripe. As URLs de retorno são fixas (APP_URL).
+import { appOrigin, clientIp, errorResponse, http, readJsonBody, type Http } from '../_shared/http.ts';
+import {
+  acquireLock, adminClient, ipKey, logSecurityEvent, rateLimit, releaseLock, requirePayingUser, verifyCaptcha,
+} from '../_shared/security.ts';
+import { idOf, isInterval, isPlanId, LIVE_STATUSES, priceIdFor, stripeClient, syncCustomer } from '../_shared/stripe.ts';
 
-const headers = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Content-Type': 'application/json; charset=utf-8',
-};
-// Um secret de preço por plano e intervalo. Os nomes devem existir nos secrets do Supabase.
-const PRICE_ENV: Record<string, string> = {
-  basico_monthly: 'STRIPE_PRICE_BASICO_MONTHLY',
-  basico_yearly: 'STRIPE_PRICE_BASICO_YEARLY',
-  pro_monthly: 'STRIPE_PRICE_PRO_MONTHLY',
-  pro_yearly: 'STRIPE_PRICE_PRO_YEARLY',
-};
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
+const SOURCE = 'stripe-checkout';
+/** Validade da sessão na Stripe (mínimo permitido: 30 minutos). */
+const SESSION_TTL_MS = 60 * 60 * 1000;
+/** Reaproveita a sessão aberta só se ainda faltar pelo menos isso para expirar. */
+const REUSE_MARGIN_MS = 10 * 60 * 1000;
 
-const handle = async (req: Request): Promise<Response> => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers });
-  if (req.method !== 'POST') return json({ error: 'Método não permitido.' }, 405);
+const handle = async (req: Request, h: Http): Promise<Response> => {
+  if (req.method === 'OPTIONS') return h.preflight();
+  if (!h.originAllowed) return h.json({ error: 'Origem não permitida.' }, 403);
+  if (req.method !== 'POST') return h.json({ error: 'Método não permitido.' }, 405);
 
-  const url = Deno.env.get('SUPABASE_URL') ?? '';
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  const stripeKey = Deno.env.get('STRIPE_SECRET_KEY') ?? '';
-  const appUrl = (Deno.env.get('APP_URL') ?? '').replace(/\/$/, '');
+  const app = appOrigin();
+  const admin = adminClient();
+  const ip = clientIp(req);
 
-  const token = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '');
-  if (!token) return json({ error: 'Sessão ausente.' }, 401);
-  if (!stripeKey || !appUrl) return json({ error: 'Pagamentos não configurados no servidor.' }, 500);
+  await rateLimit(admin, [{ bucket: `checkout:ip:${await ipKey(ip)}`, limit: 20, windowSeconds: 600, blockSeconds: 1800 }], { source: SOURCE, ip });
+  const user = await requirePayingUser(req, admin);
+  await rateLimit(admin, [{ bucket: `checkout:user:${user.id}`, limit: 8, windowSeconds: 600, blockSeconds: 900 }], { source: SOURCE, ip, userId: user.id });
 
-  const userClient = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data: userData, error: userError } = await userClient.auth.getUser(token);
-  if (userError || !userData.user) return json({ error: 'Sessão inválida.' }, 401);
-  const user = userData.user;
+  const body = await readJsonBody(req);
+  if (!body || !isPlanId(body.plan) || !isInterval(body.interval)) return h.json({ error: 'Plano inválido.', code: 'invalid_plan' }, 400);
 
-  let body: { plan?: string; interval?: string } = {};
-  try { body = await req.json(); } catch { /* corpo vazio */ }
-  const interval = body.interval === 'yearly' ? 'yearly' : 'monthly';
-  const plan = typeof body.plan === 'string' ? body.plan : '';
-  const priceEnv = PRICE_ENV[`${plan}_${interval}`];
-  if (!priceEnv) return json({ error: 'Plano inválido.' }, 400);
-  const price = Deno.env.get(priceEnv);
-  if (!price) return json({ error: 'Plano não configurado no servidor.' }, 500);
-
-  const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
-  const stripe = new Stripe(stripeKey, { httpClient: Stripe.createFetchHttpClient() });
-
-  const { data: existing, error: readError } = await admin
-    .from('nexo_subscriptions')
-    .select('stripe_customer_id, status')
-    .eq('user_id', user.id)
-    .maybeSingle();
-  if (readError) return json({ error: 'Não foi possível verificar sua assinatura.' }, 500);
-  if (existing?.status === 'active' || existing?.status === 'trialing') {
-    return json({ error: 'Você já tem uma assinatura ativa. Use “Gerenciar assinatura”.' }, 409);
+  if (!(await verifyCaptcha(body.captchaToken, 'checkout', ip))) {
+    await logSecurityEvent(admin, { source: SOURCE, kind: 'captcha_failed', userId: user.id, ip });
+    return h.json({ error: 'Não conseguimos confirmar que é você. Tente de novo.', code: 'captcha_failed' }, 403);
   }
 
-  let customerId = existing?.stripe_customer_id as string | undefined;
-  if (!customerId) {
-    const name = (user.user_metadata?.full_name ?? user.user_metadata?.name ?? '') as string;
-    const customer = await stripe.customers.create({
-      email: user.email ?? undefined,
-      name: name || undefined,
-      metadata: { user_id: user.id },
-    });
-    customerId = customer.id;
-    const { error: saveError } = await admin.from('nexo_subscriptions').upsert(
-      { user_id: user.id, stripe_customer_id: customerId, status: 'none', updated_at: new Date().toISOString() },
-      { onConflict: 'user_id' },
-    );
-    if (saveError) return json({ error: 'Não foi possível preparar o pagamento.' }, 500);
+  const price = priceIdFor(body.plan, body.interval);
+  if (!price) return h.json({ error: 'Este plano está indisponível no momento.', code: 'not_configured' }, 503);
+
+  // Um checkout por usuário de cada vez: cliques repetidos, abas ou robôs não criam sessões em paralelo.
+  const lockKey = `checkout:${user.id}`;
+  if (!(await acquireLock(admin, lockKey, 60))) {
+    return h.json({ error: 'Já estamos preparando seu pagamento. Aguarde alguns segundos.', code: 'in_progress' }, 409);
   }
-
-  // Confere na Stripe todos os clientes com este e-mail, porque o banco pode ter perdido o vínculo com o cliente antigo.
-  const byEmail = user.email ? await stripe.customers.list({ email: user.email, limit: 10 }) : { data: [] };
-  const customerIds = new Set<string>([customerId as string, ...byEmail.data.map((c) => c.id)]);
-  for (const id of customerIds) {
-    const subs = await stripe.subscriptions.list({ customer: id, status: 'all', limit: 10 });
-    if (subs.data.some((s) => ['active', 'trialing', 'past_due'].includes(s.status))) {
-      return json({ error: 'Você já tem uma assinatura ativa. Use “Gerenciar assinatura”.' }, 409);
-    }
-  }
-
-  const session = await stripe.checkout.sessions.create({
-    mode: 'subscription',
-    customer: customerId,
-    client_reference_id: user.id,
-    line_items: [{ price, quantity: 1 }],
-    success_url: `${appUrl}/app/configuracoes?checkout=success`,
-    cancel_url: `${appUrl}/app/configuracoes?checkout=cancel`,
-    customer_update: { address: 'auto', name: 'auto' },
-    subscription_data: { metadata: { user_id: user.id, plan } },
-    locale: 'pt-BR',
-    allow_promotion_codes: true,
-  });
-
-  return json({ url: session.url });
-};
-
-// Qualquer falha inesperada vira uma resposta JSON com CORS, em vez de quebrar a função.
-Deno.serve(async (req) => {
   try {
-    return await handle(req);
+    const stripe = stripeClient();
+
+    const { data: row, error: readError } = await admin
+      .from('nexo_subscriptions')
+      .select('stripe_customer_id, status')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (readError) throw new Error(`nexo_subscriptions: ${readError.message}`);
+    let customerId = (row?.stripe_customer_id as string | null) ?? null;
+    if (row && LIVE_STATUSES.has(row.status as string)) {
+      // O banco diz que há assinatura: confirma na Stripe antes de recusar (o webhook de cancelamento pode ter falhado).
+      const current = customerId ? await syncCustomer(admin, stripe, customerId, user.id) : null;
+      if (!current || LIVE_STATUSES.has(current.status)) {
+        return h.json({ error: 'Você já tem uma assinatura. Use “Gerenciar assinatura” para alterar ou regularizar.', code: 'already_subscribed' }, 409);
+      }
+    }
+
+    // Cliente da Stripe: um por usuário. A chave de idempotência evita dois clientes se o vínculo falhar no meio.
+    if (!customerId) {
+      const name = String(user.user_metadata?.full_name ?? user.user_metadata?.name ?? '').slice(0, 120);
+      const customer = await stripe.customers.create(
+        { email: user.email, name: name || undefined, metadata: { user_id: user.id } },
+        { idempotencyKey: `nexo-customer-${user.id}` },
+      );
+      const { data: linked, error: linkError } = await admin.rpc('nexo_link_customer', { p_user_id: user.id, p_customer_id: customer.id });
+      if (linkError || typeof linked !== 'string') throw new Error(`nexo_link_customer: ${linkError?.message ?? 'sem retorno'}`);
+      customerId = linked;
+    }
+
+    // Confere na Stripe se já existe assinatura viva (no cliente vinculado ou em outro com o mesmo e-mail),
+    // porque o banco pode estar atrasado em relação à Stripe.
+    const candidates = new Set<string>([customerId]);
+    const byEmail = await stripe.customers.list({ email: user.email, limit: 10 });
+    byEmail.data.forEach((c) => candidates.add(c.id));
+    for (const id of candidates) {
+      const subs = await stripe.subscriptions.list({ customer: id, status: 'all', limit: 10 });
+      if (subs.data.some((s) => LIVE_STATUSES.has(s.status))) {
+        if (id === customerId) {
+          await syncCustomer(admin, stripe, customerId, user.id);
+        } else {
+          await logSecurityEvent(admin, { source: SOURCE, kind: 'duplicate_customer', userId: user.id, ip, detail: { customer: id } });
+        }
+        return h.json({ error: 'Você já tem uma assinatura. Use “Gerenciar assinatura” para alterar ou regularizar.', code: 'already_subscribed' }, 409);
+      }
+    }
+
+    // Sessão ainda aberta: devolve a mesma se for o mesmo preço; se trocou de plano, encerra a anterior.
+    const { data: open } = await admin
+      .from('nexo_billing_checkouts')
+      .select('session_id, price_id, expires_at')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    if (open?.session_id) {
+      const previous = await stripe.checkout.sessions.retrieve(open.session_id as string).catch(() => null);
+      if (previous?.status === 'open' && idOf(previous.customer) === customerId) {
+        const fresh = previous.expires_at * 1000 > Date.now() + REUSE_MARGIN_MS;
+        if (fresh && open.price_id === price && previous.url) return h.json({ url: previous.url });
+        await stripe.checkout.sessions.expire(previous.id).catch(() => undefined);
+      }
+    }
+
+    const require3ds = Deno.env.get('STRIPE_REQUIRE_3DS') === 'true';
+    const session = await stripe.checkout.sessions.create(
+      {
+        mode: 'subscription',
+        customer: customerId,
+        client_reference_id: user.id,
+        line_items: [{ price, quantity: 1 }],
+        success_url: `${app}/app/configuracoes?checkout=success`,
+        cancel_url: `${app}/app/configuracoes?checkout=cancel`,
+        customer_update: { address: 'auto', name: 'auto' },
+        billing_address_collection: 'auto',
+        metadata: { user_id: user.id },
+        subscription_data: { metadata: { user_id: user.id } },
+        expires_at: Math.floor((Date.now() + SESSION_TTL_MS) / 1000),
+        locale: 'pt-BR',
+        allow_promotion_codes: true,
+        ...(require3ds ? { payment_method_options: { card: { request_three_d_secure: 'any' as const } } } : {}),
+      },
+      // Mesmo pedido no mesmo minuto (duplo clique, nova tentativa de rede) devolve a mesma sessão.
+      { idempotencyKey: `nexo-checkout-${user.id}-${price}-${Math.floor(Date.now() / 60000)}` },
+    );
+    if (!session.url) throw new Error('Sessão de checkout sem URL.');
+
+    const { error: saveError } = await admin.from('nexo_billing_checkouts').upsert({
+      user_id: user.id,
+      session_id: session.id,
+      price_id: price,
+      expires_at: new Date(session.expires_at * 1000).toISOString(),
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+    if (saveError) console.error(SOURCE, 'salvar sessão', saveError.message);
+
+    return h.json({ url: session.url });
+  } finally {
+    await releaseLock(admin, lockKey);
+  }
+};
+
+Deno.serve(async (req) => {
+  const h = http(req);
+  try {
+    return await handle(req, h);
   } catch (error) {
-    console.error('stripe-checkout', error);
-    return json({ error: 'Não foi possível iniciar o pagamento. Tente novamente.' }, 500);
+    return errorResponse(h, SOURCE, error);
   }
 });
