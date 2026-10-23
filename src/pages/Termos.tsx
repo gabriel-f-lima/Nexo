@@ -59,7 +59,7 @@ export default function Termos() {
           <span className="footer-links">
             <Link to="/">Início</Link>
             <Link to="/app">Abrir o app</Link>
-            <a href="mailto:g.ferreira.ldev@gmail.com">Contato</a>
+            <a href="mailto:contato@app-nexo.online">Contato</a>
           </span>
         </div>
       </footer>
