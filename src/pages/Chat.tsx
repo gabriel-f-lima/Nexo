@@ -143,6 +143,37 @@ export default function Chat() {
   const revealing = revealId !== null && shownText.length < writingText.length;
   const activeTitle = conversations.find((c) => c.id === activeConversationId)?.title;
 
+  // A tela acompanha a área visível: com o teclado aberto, encolhe e fica acima dele, sem a página rolar.
+  useEffect(() => {
+    const root = document.documentElement;
+    const viewport = window.visualViewport;
+    let frame = 0;
+    const update = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        root.style.setProperty('--chat-vh', `${viewport ? viewport.height : window.innerHeight}px`);
+        root.style.setProperty('--chat-top', `${viewport ? Math.max(0, viewport.offsetTop) : 0}px`);
+        if (window.scrollY) window.scrollTo(0, 0);
+        const body = bodyRef.current;
+        if (body && stickToBottom.current) body.scrollTop = body.scrollHeight;
+      });
+    };
+    root.classList.add('chat-lock');
+    update();
+    viewport?.addEventListener('resize', update);
+    viewport?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      viewport?.removeEventListener('resize', update);
+      viewport?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      root.classList.remove('chat-lock');
+      root.style.removeProperty('--chat-vh');
+      root.style.removeProperty('--chat-top');
+    };
+  }, []);
+
   useEffect(() => {
     useDataStore.getState().pruneExpiredLocal();
     const id = window.setInterval(() => setGreeting(getGreeting()), 60_000);
