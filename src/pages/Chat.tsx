@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEv
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ArrowUp, History, SquarePen, Star, Trash2 } from 'lucide-react';
 import { MenuButton, Modal } from '../components/ui';
+import Markdown from '../components/Markdown';
 import { useAuthStore } from '../store/auth';
 import { useDataStore, type ChatMessage, type Conversation } from '../store/data';
 import { aiService } from '../lib/assistant';
@@ -81,13 +82,17 @@ function TypingIndicator() {
   );
 }
 
-function AssistantBubble({ children, writing }: { children: ReactNode; writing?: boolean }) {
+/** Resposta do assistente, formatada (títulos, listas, negrito, links e imagens). */
+function AssistantBubble({ text, writing }: { text: string; writing?: boolean }) {
   return (
     <>
       <img className="msg-avatar" src="/nexo-logo.png" alt="" width={30} height={30} />
       <div className={`bubble ai${writing ? ' writing' : ''}`}>
-        {children}
-        {writing ? <span className="caret" aria-hidden="true" /> : null}
+        <Markdown
+          text={text}
+          streaming={writing}
+          trailing={writing ? <span className="caret" aria-hidden="true" /> : null}
+        />
       </div>
     </>
   );
@@ -137,6 +142,37 @@ export default function Chat() {
   const shownText = useTypewriter(writingText);
   const revealing = revealId !== null && shownText.length < writingText.length;
   const activeTitle = conversations.find((c) => c.id === activeConversationId)?.title;
+
+  // A tela acompanha a área visível: com o teclado aberto, encolhe e fica acima dele, sem a página rolar.
+  useEffect(() => {
+    const root = document.documentElement;
+    const viewport = window.visualViewport;
+    let frame = 0;
+    const update = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        root.style.setProperty('--chat-vh', `${viewport ? viewport.height : window.innerHeight}px`);
+        root.style.setProperty('--chat-top', `${viewport ? Math.max(0, viewport.offsetTop) : 0}px`);
+        if (window.scrollY) window.scrollTo(0, 0);
+        const body = bodyRef.current;
+        if (body && stickToBottom.current) body.scrollTop = body.scrollHeight;
+      });
+    };
+    root.classList.add('chat-lock');
+    update();
+    viewport?.addEventListener('resize', update);
+    viewport?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      viewport?.removeEventListener('resize', update);
+      viewport?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      root.classList.remove('chat-lock');
+      root.style.removeProperty('--chat-vh');
+      root.style.removeProperty('--chat-top');
+    };
+  }, []);
 
   useEffect(() => {
     useDataStore.getState().pruneExpiredLocal();
@@ -361,9 +397,7 @@ export default function Chat() {
                     {message.role === 'user' ? (
                       <div className="bubble user">{linkify(message.content)}</div>
                     ) : (
-                      <AssistantBubble writing={isRevealing && revealing}>
-                        {linkify(isRevealing ? shownText : message.content)}
-                      </AssistantBubble>
+                      <AssistantBubble writing={isRevealing && revealing} text={isRevealing ? shownText : message.content} />
                     )}
                   </motion.div>
                 );
@@ -372,7 +406,7 @@ export default function Chat() {
 
             {busy && shownText ? (
               <div className="msg ai">
-                <AssistantBubble writing>{linkify(shownText)}</AssistantBubble>
+                <AssistantBubble writing text={shownText} />
               </div>
             ) : null}
             <AnimatePresence>{busy && !shownText ? <TypingIndicator key="typing" /> : null}</AnimatePresence>

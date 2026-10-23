@@ -72,7 +72,7 @@ export default function NotificationSettings() {
     const parsed = parseHM(value);
     if (!parsed) throw new Error('INVALID_TIME');
     await enableReminder(parsed[0], parsed[1]);
-    notify(`Lembrete diário às ${value}.`, 'success');
+    notify(`Lembrete diário às ${value}.`, 'success', 'reminder');
   });
 
   const toggleReminder = (next: boolean) => {
@@ -82,7 +82,7 @@ export default function NotificationSettings() {
     }
     disableReminder();
     setError('');
-    notify('Lembrete diário desativado.', 'info');
+    notify('Lembrete diário desativado.', 'info', 'reminder');
   };
 
   /** Com o lembrete ligado, um novo horário é salvo na hora. */
@@ -96,7 +96,7 @@ export default function NotificationSettings() {
     if (minutes === eventAlertMinutes) return;
     void run(async () => {
       await setEventAlertMinutes(minutes);
-      notify(minutes ? `Avisos ${EVENT_ALERT_OPTIONS.find((o) => o.value === minutes)?.label} antes dos compromissos.` : 'Avisos de compromissos desativados.', minutes ? 'success' : 'info');
+      notify(minutes ? `Avisos ${EVENT_ALERT_OPTIONS.find((o) => o.value === minutes)?.label} antes dos compromissos.` : 'Avisos de compromissos desativados.', minutes ? 'success' : 'info', 'event-alert');
     });
   };
 

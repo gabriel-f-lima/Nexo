@@ -61,8 +61,9 @@ export default function AppShell() {
         <ErrorBoundary key={location.pathname}>
           <motion.main
             key={location.pathname}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
+            // No chat só esmaece: um transform aqui deslocaria a tela fixa do assistente.
+            initial={onChat ? { opacity: 0 } : { opacity: 0, y: 10 }}
+            animate={onChat ? { opacity: 1 } : { opacity: 1, y: 0 }}
             transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
           >
             <Outlet />
