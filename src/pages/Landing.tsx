@@ -187,7 +187,7 @@ export default function Landing() {
           <span className="footer-links">
             <Link to="/app">Abrir o app</Link>
             <Link to="/termos">Termos e privacidade</Link>
-            <a href="mailto:g.ferreira.ldev@gmail.com">Contato</a>
+            <a href="mailto:contato@app-nexo.online">Contato</a>
           </span>
         </div>
       </footer>
