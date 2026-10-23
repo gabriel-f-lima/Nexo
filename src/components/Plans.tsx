@@ -1,25 +1,30 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { LIMITS, loadPlanPrices, PLANS, startCheckout, type Interval, type PlanId, type PlanPrice } from '../lib/billing';
 import { formatMoney, type Currency } from '../lib/finance';
+import { getCaptchaToken } from '../lib/turnstile';
 import { notify } from '../lib/toast';
 import { useAuthStore } from '../store/auth';
+import '../styles/plans.css';
 
 /** Escolha de plano: alterna mensal e anual, mostra os valores da Stripe e os benefícios. */
 export default function Plans() {
   const [prices, setPrices] = useState<PlanPrice[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   const [cycle, setCycle] = useState<Interval>('yearly');
   const [busy, setBusy] = useState<PlanId | null>(null);
+  const captchaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let alive = true;
+    setFailed(false);
     loadPlanPrices()
       .then((list) => { if (alive) setPrices(list); })
       .catch(() => { if (alive) setFailed(true); });
     return () => { alive = false; };
-  }, []);
+  }, [attempt]);
 
   const find = (plan: PlanId, interval: Interval) =>
     prices?.find((p) => p.plan === plan && p.interval === interval) ?? null;
@@ -32,7 +37,8 @@ export default function Plans() {
       void (async () => {
         setBusy(plan);
         try {
-          await startCheckout(plan, cycle);
+          const captchaToken = captchaRef.current ? await getCaptchaToken(captchaRef.current, 'checkout') : undefined;
+          await startCheckout(plan, cycle, captchaToken);
         } catch (e) {
           notify(e instanceof Error ? e.message : 'Não foi possível iniciar o pagamento.', 'error');
           setBusy(null);
@@ -59,7 +65,12 @@ export default function Plans() {
         ))}
       </div>
 
-      {failed ? <p className="plans-note">Não foi possível carregar os planos agora. Tente novamente em instantes.</p> : null}
+      {failed ? (
+        <div className="center" style={{ display: 'grid', gap: 10, justifyItems: 'center' }}>
+          <p className="plans-note">Não foi possível carregar os planos agora. Verifique sua conexão.</p>
+          <button type="button" className="btn btn-ghost" onClick={() => setAttempt((n) => n + 1)}>Tentar de novo</button>
+        </div>
+      ) : null}
 
       {!failed && !prices ? (
         <div className="plans-grid">
@@ -124,6 +135,8 @@ export default function Plans() {
           })}
         </div>
       ) : null}
+
+      <div ref={captchaRef} className="captcha-slot" />
     </div>
   );
 }

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal } from './ui';
 import Plans from './Plans';
 import { confirmUpgrade, loadPlanPrices, previewUpgrade, type PlanPrice, type UpgradePreview } from '../lib/billing';
 import { formatMoney, type Currency } from '../lib/finance';
+import { getCaptchaToken } from '../lib/turnstile';
 import { useTier } from '../lib/useTier';
 import { notify } from '../lib/toast';
 import { useAuthStore } from '../store/auth';
+import '../styles/plans.css';
 
 /** Aviso de limite. No Básico oferece o upgrade para o Pro; nos demais, mostra os planos. */
 export default function Paywall({ open, onClose, title, message }: {
@@ -29,6 +31,7 @@ function UpgradeToPro({ onDone }: { onDone: () => void }) {
   const [proPrice, setProPrice] = useState<PlanPrice | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const captchaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -48,13 +51,15 @@ function UpgradeToPro({ onDone }: { onDone: () => void }) {
   const confirm = async () => {
     setBusy(true);
     try {
-      const result = await confirmUpgrade();
-      if (result.status === 'active' || result.status === 'trialing') {
+      const captchaToken = captchaRef.current ? await getCaptchaToken(captchaRef.current, 'upgrade') : undefined;
+      // O servidor só responde depois de reler a assinatura na Stripe: o Pro vale apenas se ela confirmar.
+      const result = await confirmUpgrade(captchaToken);
+      if (result.plan === 'pro' && (result.status === 'active' || result.status === 'trialing')) {
         notify('Plano atualizado para o Pro!', 'success');
         onDone();
         window.location.reload();
       } else {
-        notify('O pagamento não foi aprovado. Verifique o cartão e tente de novo.', 'error');
+        notify('O pagamento ainda não foi confirmado. Confira em “Gerenciar assinatura” antes de tentar de novo.', 'error');
         setBusy(false);
       }
     } catch (e) {
@@ -91,6 +96,7 @@ function UpgradeToPro({ onDone }: { onDone: () => void }) {
       <button type="button" className="btn btn-primary btn-block" disabled={busy} onClick={confirm}>
         {busy ? 'Atualizando…' : 'Atualizar para o Pro'}
       </button>
+      <div ref={captchaRef} className="captcha-slot" />
     </div>
   );
 }

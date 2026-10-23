@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { BellOff, BellRing, CalendarClock, Info, ShieldAlert, Sun } from 'lucide-react';
+import { BellOff, BellRing, CalendarClock, Info, Lightbulb, NotebookPen, ReceiptText, ShieldAlert, Sun } from 'lucide-react';
 import { notify } from '../lib/toast';
 import { useAuthStore } from '../store/auth';
 import {
-  EVENT_ALERT_OPTIONS, describeNotificationError, disableReminder, enableReminder,
-  setEventAlertMinutes, useNotificationSettings,
+  EVENT_ALERT_OPTIONS, describeNotificationError, disableReminder, enableReminder, requestNotificationPermission,
+  setAlertPref, setEventAlertMinutes, useNotificationSettings, type AlertPrefs,
 } from '../lib/reminder';
+import '../styles/notifications.css';
 
 const PRESETS = [
   { label: 'Manhã', value: '08:00' },
@@ -44,7 +45,7 @@ export function Switch({ checked, onChange, label, disabled }: {
 
 /** Configuração das notificações do navegador: permissão, lembrete diário e avisos de compromissos. */
 export default function NotificationSettings() {
-  const { permission, reminder, eventAlertMinutes } = useNotificationSettings();
+  const { permission, reminder, eventAlertMinutes, alerts } = useNotificationSettings();
   const hasUser = useAuthStore((s) => !!s.user);
   const [time, setTime] = useState(reminder ? formatHM(reminder.hour, reminder.minute) : '08:00');
   const [busy, setBusy] = useState(false);
@@ -72,7 +73,7 @@ export default function NotificationSettings() {
     const parsed = parseHM(value);
     if (!parsed) throw new Error('INVALID_TIME');
     await enableReminder(parsed[0], parsed[1]);
-    notify(`Lembrete diário às ${value}.`, 'success', 'reminder');
+    notify(`Lembrete diário às ${value}.`, 'success');
   });
 
   const toggleReminder = (next: boolean) => {
@@ -82,7 +83,7 @@ export default function NotificationSettings() {
     }
     disableReminder();
     setError('');
-    notify('Lembrete diário desativado.', 'info', 'reminder');
+    notify('Lembrete diário desativado.', 'info');
   };
 
   /** Com o lembrete ligado, um novo horário é salvo na hora. */
@@ -96,11 +97,26 @@ export default function NotificationSettings() {
     if (minutes === eventAlertMinutes) return;
     void run(async () => {
       await setEventAlertMinutes(minutes);
-      notify(minutes ? `Avisos ${EVENT_ALERT_OPTIONS.find((o) => o.value === minutes)?.label} antes dos compromissos.` : 'Avisos de compromissos desativados.', minutes ? 'success' : 'info', 'event-alert');
+      notify(minutes ? `Avisos ${EVENT_ALERT_OPTIONS.find((o) => o.value === minutes)?.label} antes dos compromissos.` : 'Avisos de compromissos desativados.', minutes ? 'success' : 'info');
     });
   };
 
   const unsupported = permission === 'unsupported';
+
+  /** Liga ou desliga um tipo de aviso. Ao ligar, pede a permissão do navegador se ainda não foi dada. */
+  const chooseAlert = (key: keyof AlertPrefs, next: boolean) => {
+    if (!next) { setAlertPref(key, false); return; }
+    void run(async () => {
+      if (permission !== 'granted') await requestNotificationPermission();
+      setAlertPref(key, true);
+    });
+  };
+
+  const ALERTS: Array<{ key: keyof AlertPrefs; title: string; desc: string; icon: typeof Sun }> = [
+    { key: 'bills', title: 'Contas e faturas', desc: 'Quando uma conta ou fatura está para vencer ou já venceu.', icon: ReceiptText },
+    { key: 'coach', title: 'Dicas do coach', desc: 'Orçamento acima do ritmo, metas e sequências em risco. Até 2 por dia.', icon: Lightbulb },
+    { key: 'weekly', title: 'Resumo da semana', desc: 'Toda segunda: gastos, hábitos e o que vem pela frente.', icon: NotebookPen },
+  ];
 
   return (
     <div className="notif">
@@ -185,11 +201,27 @@ export default function NotificationSettings() {
         {!hasUser && eventAlertMinutes > 0 ? <p className="notif-desc">Entre na sua conta para receber os avisos da sua agenda.</p> : null}
       </section>
 
+      <section className="notif-block">
+        <div className="notif-title">Avisos do Nexo</div>
+        {ALERTS.map((item) => (
+          <div key={item.key} className="notif-row">
+            <div className="notif-icon"><item.icon size={18} /></div>
+            <div className="grow">
+              <div className="notif-title">{item.title}</div>
+              <div className="notif-desc">{item.desc}</div>
+            </div>
+            <Switch checked={alerts[item.key]} onChange={(next) => chooseAlert(item.key, next)} label={item.title} disabled={busy || (unsupported && !alerts[item.key])} />
+          </div>
+        ))}
+      </section>
+
       {error ? <div className="warn-block" role="alert"><span className="error">{error}</span></div> : null}
 
       <p className="footnote notif-foot">
         Na versão web, os avisos aparecem enquanto o Nexo estiver aberto em uma aba do navegador, mesmo minimizada.
-        Com o navegador fechado, eles não chegam. As preferências valem só para este navegador.
+        Com o navegador fechado, eles não chegam. {hasUser
+          ? 'As preferências ficam salvas na sua conta e valem nos seus outros aparelhos; a permissão é dada em cada navegador.'
+          : 'Entre na sua conta para levar estas preferências para os seus outros aparelhos.'}
       </p>
     </div>
   );

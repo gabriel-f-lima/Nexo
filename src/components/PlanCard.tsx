@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Crown } from 'lucide-react';
 import Plans from './Plans';
-import { LIMITS, loadSubscription, openBillingPortal, PLANS, syncSubscription, type Subscription } from '../lib/billing';
+import {
+  announceTierChange, LIMITS, loadSubscription, openBillingPortal, PLANS, syncSubscription, waitForPaidTier, type Subscription,
+} from '../lib/billing';
 import { notify } from '../lib/toast';
 import { formatLongDate } from '../lib/dates';
+import '../styles/plans.css';
 
 const STATUS_LABEL: Record<string, string> = {
   active: 'Ativo',
@@ -21,6 +24,7 @@ export default function PlanCard({ userId }: { userId: string }) {
   const [sub, setSub] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
   const [portalBusy, setPortalBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [params, setParams] = useSearchParams();
 
   const refresh = () => loadSubscription(userId)
@@ -29,16 +33,30 @@ export default function PlanCard({ userId }: { userId: string }) {
     .finally(() => setLoading(false));
 
   useEffect(() => {
-    // Confere o plano direto na Stripe antes de mostrar o status.
-    void syncSubscription().finally(() => { void refresh(); });
+    let alive = true;
     const checkout = params.get('checkout');
-    if (checkout) {
-      if (checkout === 'success') notify('Pagamento recebido. Seu plano será atualizado em instantes.', 'success');
+    if (checkout) setParams({}, { replace: true });
+
+    if (checkout === 'success') {
+      // O endereço de retorno não prova pagamento: o plano só aparece depois que o servidor confirma com a Stripe.
+      setConfirming(true);
+      void waitForPaidTier(userId).then((tier) => {
+        if (!alive) return;
+        setConfirming(false);
+        void refresh();
+        if (tier === 'free') {
+          notify('A Stripe ainda está confirmando seu pagamento. Isso pode levar alguns minutos; atualize esta página depois.', 'info');
+          return;
+        }
+        notify(`Plano ${PLANS.find((p) => p.id === tier)?.name ?? ''} ativado!`, 'success');
+        announceTierChange();
+      });
+    } else {
       if (checkout === 'cancel') notify('Pagamento cancelado. Nenhuma cobrança foi feita.', 'info');
-      setParams({}, { replace: true });
-      // Dá um tempo para o webhook da Stripe atualizar o status.
-      window.setTimeout(() => { void refresh(); }, 3000);
+      // Confere o plano direto na Stripe antes de mostrar o status.
+      void syncSubscription().finally(() => { if (alive) void refresh(); });
     }
+    return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
@@ -57,6 +75,9 @@ export default function PlanCard({ userId }: { userId: string }) {
     }
   };
 
+  if (confirming) {
+    return <div className="card text-2" role="status" style={{ fontSize: 13 }}>Confirmando seu pagamento com a Stripe…</div>;
+  }
   if (loading) {
     return <div className="card text-2" style={{ fontSize: 13 }}>Carregando seu plano…</div>;
   }

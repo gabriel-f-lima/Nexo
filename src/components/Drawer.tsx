@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-  Bell, BellOff, CalendarDays, CheckSquare, ChevronRight, HelpCircle, LogIn, Settings, Sparkles, Sun, Wallet, X,
+  Bell, BellOff, CalendarDays, CheckSquare, ChevronRight, HelpCircle, LogIn, Settings, Sparkles, Sun, Target, Trophy, Wallet, X,
 } from 'lucide-react';
 import { useUiStore } from '../store/ui';
 import { useAuthStore } from '../store/auth';
@@ -15,10 +15,12 @@ import NotificationSettings from './NotificationSettings';
 
 const MENU = [
   { to: '/app/chat', label: 'Assistente', icon: Sparkles },
-  { to: '/app/home', label: 'Seu dia', icon: Sun },
+  { to: '/app/home', label: 'Meu dia', icon: Sun },
   { to: '/app/agenda', label: 'Agenda', icon: CalendarDays },
   { to: '/app/rotina', label: 'Rotina', icon: CheckSquare },
-  { to: '/app/financas', label: 'Controle financeiro', icon: Wallet },
+  { to: '/app/financas', label: 'Financeiro', icon: Wallet },
+  { to: '/app/metas', label: 'Metas', icon: Target },
+  { to: '/app/conquistas', label: 'Conquistas', icon: Trophy },
   { to: '/app/configuracoes', label: 'Configurações', icon: Settings },
   { to: '/app/ajuda', label: 'Ajuda', icon: HelpCircle },
 ];

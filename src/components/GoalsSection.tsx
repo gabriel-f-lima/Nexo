@@ -54,7 +54,7 @@ export default function GoalsSection() {
     <div style={{ display: 'grid', gap: 12 }}>
       <div className="section-head">
         <div>
-          <div className="section-title">Metas</div>
+          <div className="section-title">Metas financeiras</div>
           <div className="section-hint">Acompanhe o que você quer juntar</div>
         </div>
         <motion.button type="button" className="icon-btn" whileTap={{ scale: 0.9 }} onClick={newGoal} aria-label="Nova meta" style={{ background: 'var(--accent)', color: 'var(--bg)', border: 0 }}>
