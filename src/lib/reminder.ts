@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { notify } from './toast';
 import { formatTime, toISODate } from './dates';
+import { supabase } from './supabase';
 import { useDataStore } from '../store/data';
 
 /**
  * Notificações da versão web. Sem um servidor de push, os avisos só chegam enquanto o Nexo estiver
  * aberto em alguma aba do navegador (ela pode ficar minimizada ou em segundo plano).
  * O service worker (/sw.js) exibe a notificação do sistema e traz o app para frente ao clicar nela.
+ * As preferências ficam no navegador e também na conta (tabela nexo_preferences), para valer em todos os aparelhos.
  */
 const REMINDER_KEY = 'nexo-daily-reminder-v1';
 const EVENT_ALERT_KEY = 'nexo-event-alerts-v1';
+const ALERT_PREFS_KEY = 'nexo-alert-prefs-v1';
 const FIRED_KEY = 'nexo-event-alerts-fired-v1';
 const FIRED_RETENTION_MS = 2 * 24 * 60 * 60 * 1000;
 
@@ -79,6 +82,30 @@ export const getEventAlertMinutes = (): number => {
   return EVENT_ALERT_OPTIONS.some((option) => option.value === minutes) ? (minutes as number) : 0;
 };
 
+/** Avisos de contas e faturas, dicas do coach e resumo da semana. Ligados por padrão. */
+export interface AlertPrefs {
+  bills: boolean;
+  coach: boolean;
+  weekly: boolean;
+}
+
+const DEFAULT_ALERT_PREFS: AlertPrefs = { bills: true, coach: true, weekly: true };
+
+export const getAlertPrefs = (): AlertPrefs => {
+  const parsed = readJson<Partial<AlertPrefs>>(ALERT_PREFS_KEY) ?? {};
+  return {
+    bills: typeof parsed.bills === 'boolean' ? parsed.bills : DEFAULT_ALERT_PREFS.bills,
+    coach: typeof parsed.coach === 'boolean' ? parsed.coach : DEFAULT_ALERT_PREFS.coach,
+    weekly: typeof parsed.weekly === 'boolean' ? parsed.weekly : DEFAULT_ALERT_PREFS.weekly,
+  };
+};
+
+export const setAlertPref = (key: keyof AlertPrefs, value: boolean): void => {
+  writeJson(ALERT_PREFS_KEY, { ...getAlertPrefs(), [key]: value });
+  emit();
+  schedulePush();
+};
+
 export const canNotify = (): boolean => typeof window !== 'undefined' && 'Notification' in window;
 
 export const getPermission = (): NotificationPermissionState =>
@@ -114,12 +141,14 @@ export const enableReminder = async (hour: number, minute: number): Promise<Dail
   const reminder: DailyReminder = { hour, minute, ...(passedToday ? { lastFiredOn: toISODate(now) } : {}) };
   writeJson(REMINDER_KEY, reminder);
   emit();
+  schedulePush();
   return reminder;
 };
 
 export const disableReminder = (): void => {
   removeKey(REMINDER_KEY);
   emit();
+  schedulePush();
 };
 
 export const setEventAlertMinutes = async (minutes: number): Promise<void> => {
@@ -128,10 +157,103 @@ export const setEventAlertMinutes = async (minutes: number): Promise<void> => {
   if (minutes > 0) writeJson(EVENT_ALERT_KEY, { minutes });
   else removeKey(EVENT_ALERT_KEY);
   emit();
+  schedulePush();
+};
+
+/** Pede a permissão do navegador para notificar (a partir de um clique). */
+export const requestNotificationPermission = ensurePermission;
+
+/* Sincronização com a conta */
+
+const formatHM = (hour: number, minute: number) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+let pushTimer: number | undefined;
+/** Evita gravar de volta o que acabou de chegar da nuvem. */
+let applyingRemote = false;
+
+const preferencesRow = (userId: string) => {
+  const reminder = getReminder();
+  const alerts = getAlertPrefs();
+  return {
+    user_id: userId,
+    daily_reminder: reminder ? formatHM(reminder.hour, reminder.minute) : null,
+    event_alert_minutes: getEventAlertMinutes(),
+    bill_alerts: alerts.bills,
+    coach_alerts: alerts.coach,
+    weekly_summary: alerts.weekly,
+    updated_at: new Date().toISOString(),
+  };
+};
+
+/** Grava as preferências na conta pouco depois da última mudança. Sem conta, ficam só neste navegador. */
+function schedulePush(): void {
+  if (applyingRemote || typeof window === 'undefined') return;
+  window.clearTimeout(pushTimer);
+  pushTimer = window.setTimeout(() => {
+    const userId = useDataStore.getState().userId;
+    if (!userId) return;
+    void supabase.from('nexo_preferences').upsert(preferencesRow(userId), { onConflict: 'user_id' }).then(({ error }) => {
+      if (error && import.meta.env.DEV) console.warn('[nexo] preferências', error);
+    });
+  }, 600);
+}
+
+const HM_PATTERN = /^([01][0-9]|2[0-3]):([0-5][0-9])$/;
+
+/**
+ * Ao entrar: aplica as preferências salvas na conta. Se a conta ainda não tem nenhuma, envia as deste navegador.
+ * A permissão de notificação continua sendo de cada navegador.
+ */
+export const syncPreferences = async (userId: string): Promise<void> => {
+  const { data, error } = await supabase
+    .from('nexo_preferences')
+    .select('daily_reminder,event_alert_minutes,bill_alerts,coach_alerts,weekly_summary')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) {
+    // Tabela ainda não criada (migration pendente) ou sem conexão: segue com as preferências locais.
+    if (import.meta.env.DEV) console.warn('[nexo] preferências', error);
+    return;
+  }
+  if (useDataStore.getState().userId !== userId) return;
+  if (!data) {
+    const hasLocal = !!getReminder() || getEventAlertMinutes() > 0 || readJson(ALERT_PREFS_KEY) !== null;
+    if (hasLocal) schedulePush();
+    return;
+  }
+
+  const row = data as {
+    daily_reminder: string | null; event_alert_minutes: number; bill_alerts: boolean; coach_alerts: boolean; weekly_summary: boolean;
+  };
+  applyingRemote = true;
+  try {
+    const match = row.daily_reminder ? HM_PATTERN.exec(row.daily_reminder) : null;
+    if (match) {
+      const hour = Number(match[1]);
+      const minute = Number(match[2]);
+      const current = getReminder();
+      // Mesmo horário: mantém o "já avisei hoje" deste navegador.
+      if (!current || current.hour !== hour || current.minute !== minute) {
+        const now = new Date();
+        const passedToday = minutesOfDay(now.getHours(), now.getMinutes()) >= minutesOfDay(hour, minute);
+        writeJson(REMINDER_KEY, { hour, minute, ...(passedToday ? { lastFiredOn: toISODate(now) } : {}) });
+      }
+    } else {
+      removeKey(REMINDER_KEY);
+    }
+    if (row.event_alert_minutes > 0 && EVENT_ALERT_OPTIONS.some((o) => o.value === row.event_alert_minutes)) {
+      writeJson(EVENT_ALERT_KEY, { minutes: row.event_alert_minutes });
+    } else {
+      removeKey(EVENT_ALERT_KEY);
+    }
+    writeJson(ALERT_PREFS_KEY, { bills: row.bill_alerts !== false, coach: row.coach_alerts !== false, weekly: row.weekly_summary !== false });
+    emit();
+  } finally {
+    applyingRemote = false;
+  }
 };
 
 /** Mostra a notificação do sistema (via service worker quando houver) e, com a aba visível, um aviso na tela. */
-const showNotification = async (title: string, body: string, tag: string, url: string, toastText = body): Promise<void> => {
+export const showNotification = async (title: string, body: string, tag: string, url: string, toastText = body): Promise<void> => {
   const visible = document.visibilityState === 'visible';
   if (visible) notify(toastText, 'info');
   if (getPermission() !== 'granted') return;
@@ -245,7 +367,7 @@ export const startReminderWatcher = (): (() => void) => {
     checkEventAlerts();
   };
   const onStorage = (event: StorageEvent) => {
-    if (event.key === REMINDER_KEY || event.key === EVENT_ALERT_KEY) emit();
+    if (event.key === REMINDER_KEY || event.key === EVENT_ALERT_KEY || event.key === ALERT_PREFS_KEY) emit();
   };
   const id = window.setInterval(tick, 20_000);
   document.addEventListener('visibilitychange', tick);
@@ -264,12 +386,14 @@ export interface NotificationSettings {
   permission: NotificationPermissionState;
   reminder: DailyReminder | null;
   eventAlertMinutes: number;
+  alerts: AlertPrefs;
 }
 
 const snapshot = (): NotificationSettings => ({
   permission: getPermission(),
   reminder: getReminder(),
   eventAlertMinutes: getEventAlertMinutes(),
+  alerts: getAlertPrefs(),
 });
 
 /** Preferências de notificação atuais; atualiza quando mudam aqui, em outra aba ou na permissão do navegador. */
@@ -277,7 +401,11 @@ export const useNotificationSettings = (): NotificationSettings => {
   const [state, setState] = useState(snapshot);
 
   useEffect(() => {
-    const refresh = () => setState(snapshot());
+    // Só troca o estado quando algo mudou de fato (evita renderizar o menu a cada foco da janela).
+    const refresh = () => setState((current) => {
+      const next = snapshot();
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
     listeners.add(refresh);
     window.addEventListener('focus', refresh);
 

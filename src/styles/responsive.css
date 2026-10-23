@@ -1,0 +1,15 @@
+/* Ajustes para telas pequenas e para quem prefere menos movimento. Fica por último. */
+
+/* ===== Telas pequenas ===== */
+@media (max-width: 480px) {
+  .screen { padding: 0 16px 120px; }
+  .app-header { margin: 0 -16px 16px; padding-left: 16px; padding-right: 16px; }
+  .card { padding: 15px; }
+  .screen-stack { gap: 16px; }
+  .fab { right: 16px; bottom: 16px; }
+}
+
+/* ===== Movimento reduzido ===== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}

@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase';
 import { notify } from '../lib/toast';
 import { toISODate } from '../lib/dates';
 import { canEditHabitDay, isPastEvent } from '../lib/rules';
+import { planErrorMessage } from '../lib/billing';
 
 /* Tipos espelham o aplicativo mobile (src/types/index.ts). */
 
@@ -80,15 +81,27 @@ const conversationRow = (c: Conversation, userId: string) => ({
 });
 
 /** Grava na nuvem e atualiza o estado de sincronização exibido nas configurações. */
-export const writeOp = async (label: string, op: () => PromiseLike<{ error: unknown }>): Promise<void> => {
+export const writeOp = async (
+  label: string,
+  op: () => PromiseLike<{ error: unknown }>,
+  onPlanError?: () => void,
+): Promise<void> => {
   useDataStore.setState({ syncStatus: 'syncing', syncMessage: 'Salvando na nuvem…' });
   try {
     const { error } = await op();
     if (error) throw error;
     useDataStore.setState({ syncStatus: 'synced', syncMessage: 'Seus dados estão sincronizados com a nuvem.' });
   } catch (error) {
-    useDataStore.setState({ syncStatus: 'error', syncMessage: 'Não foi possível sincronizar. Verifique a conexão.' });
-    notify('Não foi possível salvar na nuvem. Tente novamente.', 'error');
+    // O banco confere o plano e os limites: uma recusa por plano não é falha de conexão.
+    const planMessage = planErrorMessage(error);
+    if (planMessage) {
+      useDataStore.setState({ syncStatus: 'synced', syncMessage: 'Seus dados estão sincronizados com a nuvem.' });
+      notify(planMessage, 'error');
+      onPlanError?.();
+    } else {
+      useDataStore.setState({ syncStatus: 'error', syncMessage: 'Não foi possível sincronizar. Verifique a conexão.' });
+      notify('Não foi possível salvar na nuvem. Tente novamente.', 'error');
+    }
     if (import.meta.env.DEV) console.warn(`[nexo] ${label}`, error);
   }
 };
@@ -141,9 +154,11 @@ interface DataState {
   addTask: (title: string) => void;
   toggleTask: (id: string) => void;
   removeTask: (id: string) => void;
-  addEvent: (title: string, start: string, location?: string) => void;
+  /** Devolve o id do compromisso criado, ou null se não foi possível. */
+  addEvent: (title: string, start: string, location?: string) => string | null;
   removeEvent: (id: string) => void;
-  addHabit: (name: string) => void;
+  /** Devolve o id do hábito criado, ou null se não foi possível. */
+  addHabit: (name: string) => string | null;
   removeHabit: (id: string) => void;
   toggleHabitForDate: (id: string, date: string) => void;
 
@@ -316,7 +331,7 @@ export const useDataStore = create<DataState>()((set, get) => ({
 
   addEvent: (title, start, location) => {
     const clean = title.trim().slice(0, MAX_TITLE);
-    if (!clean || isPastEvent(start)) return;
+    if (!clean || isPastEvent(start)) return null;
     const event: AgendaEvent = {
       id: createId(),
       title: clean,
@@ -325,6 +340,7 @@ export const useDataStore = create<DataState>()((set, get) => ({
     };
     set((s) => ({ events: [...s.events, event] }));
     void upsertRow('nexo_events', (uid) => eventRow(event, uid));
+    return event.id;
   },
 
   removeEvent: (id) => {
@@ -336,10 +352,11 @@ export const useDataStore = create<DataState>()((set, get) => ({
 
   addHabit: (name) => {
     const clean = name.trim().slice(0, 60);
-    if (!clean) return;
+    if (!clean) return null;
     const habit: Habit = { id: createId(), name: clean, doneDates: [] };
     set((s) => ({ habits: [...s.habits, habit] }));
     void upsertRow('nexo_habits', (uid) => habitRow(habit, uid));
+    return habit.id;
   },
 
   removeHabit: (id) => {

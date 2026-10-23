@@ -1,14 +1,15 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowUp, History, SquarePen, Star, Trash2 } from 'lucide-react';
 import { MenuButton, Modal } from '../components/ui';
-import Markdown from '../components/Markdown';
 import { useAuthStore } from '../store/auth';
 import { useDataStore, type ChatMessage, type Conversation } from '../store/data';
 import { aiService } from '../lib/assistant';
 import { confirmAction } from '../lib/confirm';
 import { notify } from '../lib/toast';
 import { formatConversationDate, getGreeting } from '../lib/dates';
+import '../styles/chat.css';
 
 /**
  * Sugestões da tela inicial. As perguntas completas são enviadas na hora; as que precisam de detalhes
@@ -82,17 +83,13 @@ function TypingIndicator() {
   );
 }
 
-/** Resposta do assistente, formatada (títulos, listas, negrito, links e imagens). */
-function AssistantBubble({ text, writing }: { text: string; writing?: boolean }) {
+function AssistantBubble({ children, writing }: { children: ReactNode; writing?: boolean }) {
   return (
     <>
       <img className="msg-avatar" src="/nexo-logo.png" alt="" width={30} height={30} />
       <div className={`bubble ai${writing ? ' writing' : ''}`}>
-        <Markdown
-          text={text}
-          streaming={writing}
-          trailing={writing ? <span className="caret" aria-hidden="true" /> : null}
-        />
+        {children}
+        {writing ? <span className="caret" aria-hidden="true" /> : null}
       </div>
     </>
   );
@@ -142,37 +139,6 @@ export default function Chat() {
   const shownText = useTypewriter(writingText);
   const revealing = revealId !== null && shownText.length < writingText.length;
   const activeTitle = conversations.find((c) => c.id === activeConversationId)?.title;
-
-  // A tela acompanha a área visível: com o teclado aberto, encolhe e fica acima dele, sem a página rolar.
-  useEffect(() => {
-    const root = document.documentElement;
-    const viewport = window.visualViewport;
-    let frame = 0;
-    const update = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        root.style.setProperty('--chat-vh', `${viewport ? viewport.height : window.innerHeight}px`);
-        root.style.setProperty('--chat-top', `${viewport ? Math.max(0, viewport.offsetTop) : 0}px`);
-        if (window.scrollY) window.scrollTo(0, 0);
-        const body = bodyRef.current;
-        if (body && stickToBottom.current) body.scrollTop = body.scrollHeight;
-      });
-    };
-    root.classList.add('chat-lock');
-    update();
-    viewport?.addEventListener('resize', update);
-    viewport?.addEventListener('scroll', update);
-    window.addEventListener('resize', update);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      viewport?.removeEventListener('resize', update);
-      viewport?.removeEventListener('scroll', update);
-      window.removeEventListener('resize', update);
-      root.classList.remove('chat-lock');
-      root.style.removeProperty('--chat-vh');
-      root.style.removeProperty('--chat-top');
-    };
-  }, []);
 
   useEffect(() => {
     useDataStore.getState().pruneExpiredLocal();
@@ -283,7 +249,7 @@ export default function Chat() {
   const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 0);
 
   /** Coloca o começo da mensagem no campo, com o cursor no fim, para o usuário completar os detalhes. */
-  const fillInput = (text: string) => {
+  const fillInput = (text: string, hint = 'Escreva o nome da tarefa e, se quiser, o dia e o horário. Depois é só enviar.') => {
     setInput(text);
     window.setTimeout(() => {
       const field = inputRef.current;
@@ -291,8 +257,19 @@ export default function Chat() {
       field.focus();
       field.setSelectionRange(text.length, text.length);
     }, 0);
-    notify('Escreva o nome da tarefa e, se quiser, o dia e o horário. Depois é só enviar.', 'info');
+    if (hint) notify(hint, 'info');
   };
+
+  // Texto trazido de outra tela (ex.: registro rápido que não entendeu a frase): entra no campo, sem enviar.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const draft = (location.state as { draft?: unknown } | null)?.draft;
+  useEffect(() => {
+    if (typeof draft !== 'string' || !draft.trim()) return;
+    fillInput(draft.slice(0, MAX_LENGTH), 'Confira a mensagem e envie para o assistente.');
+    navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- roda só quando chega um rascunho novo.
+  }, [draft]);
 
   const newConversation = () => {
     if (!hasUser) {
@@ -397,7 +374,9 @@ export default function Chat() {
                     {message.role === 'user' ? (
                       <div className="bubble user">{linkify(message.content)}</div>
                     ) : (
-                      <AssistantBubble writing={isRevealing && revealing} text={isRevealing ? shownText : message.content} />
+                      <AssistantBubble writing={isRevealing && revealing}>
+                        {linkify(isRevealing ? shownText : message.content)}
+                      </AssistantBubble>
                     )}
                   </motion.div>
                 );
@@ -406,7 +385,7 @@ export default function Chat() {
 
             {busy && shownText ? (
               <div className="msg ai">
-                <AssistantBubble writing text={shownText} />
+                <AssistantBubble writing>{linkify(shownText)}</AssistantBubble>
               </div>
             ) : null}
             <AnimatePresence>{busy && !shownText ? <TypingIndicator key="typing" /> : null}</AnimatePresence>

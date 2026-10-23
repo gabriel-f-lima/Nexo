@@ -13,6 +13,8 @@ import { displayName } from '../lib/user';
 import DeleteAccountModal from '../components/DeleteAccountModal';
 import NotificationSettings from '../components/NotificationSettings';
 import PlanCard from '../components/PlanCard';
+import WhatsAppCard from '../components/WhatsAppCard';
+import { whatsappEnabled } from '../lib/whatsapp';
 
 /** Conta, sincronização e segurança, como a tela de Configurações do app. */
 export default function Configuracoes() {
@@ -174,6 +176,13 @@ export default function Configuracoes() {
         <div className="card">
           <NotificationSettings />
         </div>
+
+        {whatsappEnabled && user ? (
+          <>
+            <div className="eyebrow" style={{ color: 'var(--text-2)' }}>Integrações</div>
+            <WhatsAppCard />
+          </>
+        ) : null}
 
         <div className="eyebrow" style={{ color: 'var(--text-2)' }}>Privacidade</div>
         <div className="card" style={{ display: 'grid', gap: 10 }}>

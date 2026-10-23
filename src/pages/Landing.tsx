@@ -1,6 +1,8 @@
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Bell, CalendarDays, CheckSquare, Sparkles, Wallet, LayoutDashboard, ArrowRight, ChevronDown } from 'lucide-react';
+import '../styles/site.css';
+import '../styles/landing.css';
 
 const FEATURES = [
   { icon: Sparkles, title: 'Assistente com IA', text: 'Crie, consulte e remova compromissos, hábitos e tarefas conversando. Também pesquisa na web e indica as fontes.' },
@@ -187,7 +189,7 @@ export default function Landing() {
           <span className="footer-links">
             <Link to="/app">Abrir o app</Link>
             <Link to="/termos">Termos e privacidade</Link>
-            <a href="mailto:contato@app-nexo.online">Contato</a>
+            <a href="mailto:g.ferreira.ldev@gmail.com">Contato</a>
           </span>
         </div>
       </footer>

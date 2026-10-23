@@ -3,6 +3,8 @@ import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import { useDataStore } from './data';
 import { useFinanceStore } from './finance';
+import { useProgressStore } from './progress';
+import { syncPreferences } from '../lib/reminder';
 
 interface AuthState {
   session: Session | null;
@@ -30,10 +32,15 @@ const applySession = (session: Session | null) => {
     if (useDataStore.getState().userId === session.user.id) return;
     // O financeiro carrega depois da conta, para que a marca de inicialização já exista.
     const userId = session.user.id;
-    void useDataStore.getState().activate(session.user).then(() => useFinanceStore.getState().load(userId));
+    void useDataStore.getState().activate(session.user).then(() => Promise.all([
+      useFinanceStore.getState().load(userId),
+      useProgressStore.getState().load(userId),
+      syncPreferences(userId),
+    ]));
   } else {
     useDataStore.getState().reset();
     useFinanceStore.getState().reset();
+    useProgressStore.getState().reset();
   }
 };
 

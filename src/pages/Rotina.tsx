@@ -1,30 +1,21 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, CalendarCheck, Ellipsis, Flame, Leaf, Plus, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarCheck, Ellipsis, Flame, Leaf, Plus, Sparkles, Target, Trash2 } from 'lucide-react';
 import { Header, Modal } from '../components/ui';
 import { useDataStore, type Habit } from '../store/data';
 import { useAuthStore } from '../store/auth';
 import { confirmAction } from '../lib/confirm';
 import { addDays, formatLongDate, parseDateKey, toISODate, weekStart } from '../lib/dates';
+import { currentStreak, streakGoalProgress } from '../lib/streaks';
+import { useProgressStore } from '../store/progress';
+import { StreakGoalForm } from '../components/goals/StreakGoals';
 import { canEditHabitDay } from '../lib/rules';
 import { LIMITS } from '../lib/billing';
 import { useTier } from '../lib/useTier';
 import Paywall from '../components/Paywall';
+import '../styles/planning.css';
 
 const DAY_NAMES = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-
-/** Dias seguidos a partir de hoje (ou de ontem, se hoje ainda não foi marcado). */
-const streakFor = (doneDates: string[], today: string): number => {
-  const done = new Set(doneDates);
-  let cursor = parseDateKey(today);
-  if (!done.has(today)) cursor = addDays(cursor, -1);
-  let count = 0;
-  while (done.has(toISODate(cursor))) {
-    count += 1;
-    cursor = addDays(cursor, -1);
-  }
-  return count;
-};
 
 /** Rotina de hábitos com semana, progresso do dia e sequência de cada hábito. */
 export default function Rotina() {
@@ -50,6 +41,10 @@ export default function Rotina() {
   const [formOpen, setFormOpen] = useState(false);
   const [habitName, setHabitName] = useState('');
   const [formError, setFormError] = useState('');
+  const [actionsFor, setActionsFor] = useState<Habit | null>(null);
+  const [streakFor, setStreakFor] = useState<Habit | null>(null);
+  const streakGoals = useProgressStore((s) => s.streakGoals);
+  const progressReady = useProgressStore((s) => s.ready);
 
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(week, i)), [week]);
   const completed = habits.filter((h) => h.doneDates.includes(selectedDate)).length;
@@ -188,7 +183,9 @@ export default function Rotina() {
         <AnimatePresence initial={false}>
           {habits.length ? habits.map((habit, index) => {
             const done = habit.doneDates.includes(selectedDate);
-            const streak = streakFor(habit.doneDates, today);
+            const streak = currentStreak(habit.doneDates, today);
+            const goal = streakGoals.find((g) => g.habitId === habit.id);
+            const goalProgress = goal ? streakGoalProgress(goal, habit, today) : null;
             return (
               <motion.div
                 key={habit.id}
@@ -217,6 +214,7 @@ export default function Rotina() {
                     <span className="streak">
                       <Flame size={13} color={streak ? 'var(--warn)' : 'var(--muted)'} />
                       {streak} {streak === 1 ? 'dia seguido' : 'dias seguidos'}
+                      {goalProgress ? (goalProgress.achieved ? ` · meta de ${goalProgress.target} cumprida` : ` · meta ${goalProgress.target} (faltam ${goalProgress.remaining})`) : ''}
                     </span>
                   </span>
                 </motion.button>
@@ -225,8 +223,8 @@ export default function Rotina() {
                   className="icon-btn ghost sm"
                   style={{ marginRight: 10 }}
                   whileTap={{ scale: 0.9 }}
-                  onClick={() => { void remove(habit); }}
-                  aria-label={`Remover hábito ${habit.name}`}
+                  onClick={() => setActionsFor(habit)}
+                  aria-label={`Opções do hábito ${habit.name}`}
                 >
                   <Ellipsis size={19} />
                 </motion.button>
@@ -249,6 +247,23 @@ export default function Rotina() {
           {formError ? <p className="error">{formError}</p> : null}
           <motion.button type="submit" whileTap={{ scale: 0.98 }} className="btn btn-primary btn-block">Salvar hábito</motion.button>
         </form>
+      </Modal>
+      <Modal open={actionsFor !== null} onClose={() => setActionsFor(null)} title={actionsFor?.name}>
+        {actionsFor ? (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {progressReady ? (
+              <button type="button" className="option" onClick={() => { const habit = actionsFor; setActionsFor(null); requireAuth(() => setStreakFor(habit)); }}>
+                <Target size={17} /> {streakGoals.some((g) => g.habitId === actionsFor.id) ? 'Editar meta de sequência' : 'Definir meta de sequência'}
+              </button>
+            ) : null}
+            <button type="button" className="option" style={{ color: 'var(--danger)' }} onClick={() => { const habit = actionsFor; setActionsFor(null); void remove(habit); }}>
+              <Trash2 size={17} /> Remover hábito
+            </button>
+          </div>
+        ) : null}
+      </Modal>
+      <Modal open={streakFor !== null} onClose={() => setStreakFor(null)} title="Meta de sequência">
+        {streakFor ? <StreakGoalForm goal={streakGoals.find((g) => g.habitId === streakFor.id) ?? null} habitId={streakFor.id} onDone={() => setStreakFor(null)} /> : null}
       </Modal>
       <Paywall open={paywall !== null} onClose={() => setPaywall(null)} title="Limite de metas de rotina" message={paywall ?? ''} />
     </div>

@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUp } from 'lucide-react';
 import legalHtml from '../legal/termos.html?raw';
+import '../styles/site.css';
+import '../styles/legal.css';
 
 /** Termos de Uso e Política de Privacidade, como rota do site. */
 export default function Termos() {
@@ -59,7 +61,7 @@ export default function Termos() {
           <span className="footer-links">
             <Link to="/">Início</Link>
             <Link to="/app">Abrir o app</Link>
-            <a href="mailto:contato@app-nexo.online">Contato</a>
+            <a href="mailto:g.ferreira.ldev@gmail.com">Contato</a>
           </span>
         </div>
       </footer>

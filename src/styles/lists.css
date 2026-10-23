@@ -1,0 +1,82 @@
+/* Progresso, listas, calendário, semana da rotina e textos de ajuda. */
+
+/* ===== Progresso e resumo ===== */
+.track { height: 10px; border-radius: 6px; background: var(--active); overflow: hidden; }
+.fill { height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--accent-2), var(--accent)); box-shadow: 0 0 16px rgba(90, 240, 170, 0.35); }
+.hero-card {
+  position: relative; overflow: hidden;
+  padding: 20px; border-radius: 20px;
+  background:
+    radial-gradient(420px 180px at 100% 0%, rgba(90, 240, 170, 0.12), transparent 70%),
+    linear-gradient(160deg, var(--card-2) 0%, var(--card) 100%);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow);
+}
+.stat-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: clamp(20px, 6.5vw, 26px); font-weight: 750; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat-line small { font-size: 14px; color: var(--text-2); font-weight: 500; letter-spacing: 0; }
+.hero-card .stat-line { font-size: clamp(24px, 8vw, 34px); }
+.badge-pct { padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--accent); font-size: 14px; font-weight: 800; display: flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; }
+.celebrate { display: flex; align-items: center; gap: 12px; padding: 14px; border-radius: 16px; background: var(--accent-soft); border: 1px solid var(--accent-border); }
+.celebrate-icon { width: 42px; height: 42px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.celebrate h3 { font-size: 15px; }
+.celebrate p { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+
+/* ===== Listas ===== */
+.task-row, .habit-row, .event-row {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 15px 16px;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease), transform 0.2s var(--ease);
+}
+.task-row:hover, .habit-row:hover { border-color: var(--accent-border); background: var(--card-2); }
+.task-row.done .task-title, .habit-row.done .habit-name { color: var(--text-2); text-decoration: line-through; }
+.habit-row.done { background: var(--accent-soft); border-color: var(--accent-border); }
+.event-row { overflow: hidden; padding: 0; }
+.event-accent { width: 4px; align-self: stretch; background: linear-gradient(180deg, var(--accent), var(--accent-2)); }
+.event-info { flex: 1; min-width: 0; padding: 14px; display: grid; gap: 3px; }
+.event-time { color: var(--accent); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.event-title { font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.event-loc { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip { background: var(--card); border: 1px solid var(--border-strong); border-radius: 999px; padding: 8px 14px; font-size: 13px; color: var(--text-2); transition: border-color 0.2s, color 0.2s, background 0.2s; }
+.chip:hover { border-color: var(--accent-border); color: var(--text); }
+.screen-stack > .row.gap-sm:has(> .chip) { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.screen-stack > .row.gap-sm:has(> .chip)::-webkit-scrollbar { display: none; }
+.screen-stack > .row.gap-sm > .chip { flex: 0 0 auto; white-space: nowrap; }
+.card svg { display: block; max-width: 100%; height: auto; }
+.card .row.gap-md { flex-wrap: wrap; }
+
+
+/* ===== Calendário ===== */
+.cal { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 16px; box-shadow: var(--shadow-sm); }
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.cal-title { font-size: 17px; font-weight: 700; text-transform: capitalize; letter-spacing: -0.01em; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); row-gap: 2px; }
+.cal-wd { text-align: center; color: var(--muted); font-size: 12px; font-weight: 600; padding-bottom: 8px; }
+.cal-day { position: relative; height: 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; border-radius: 12px; }
+.cal-day .num { position: relative; z-index: 1; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13.5px; color: var(--text-2); transition: background 0.15s; font-variant-numeric: tabular-nums; }
+.cal-day:hover:not(:disabled):not(.sel) .num { background: var(--card-2); color: var(--text); }
+.cal-day.today .num { border: 1px solid var(--accent); color: var(--text); }
+.cal-day .pin { width: 4px; height: 4px; border-radius: 50%; background: transparent; }
+.cal-day .pin.on { background: var(--accent); }
+.cal-selected { display: none; }
+.cal-day.sel .num { color: var(--accent-ink); font-weight: 700; background: var(--accent); border-color: var(--accent); }
+.cal-day.sel .pin.on { background: var(--accent); }
+.cal-day:disabled { opacity: 0.35; cursor: not-allowed; }
+.cal-day:disabled .num { color: var(--muted); }
+
+/* ===== Semana (rotina) ===== */
+.week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.week-day { position: relative; z-index: 0; border-radius: 14px; padding: 10px 0 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; background: var(--card); border: 1px solid var(--border); color: var(--text-2); transition: border-color 0.2s; }
+.week-day:hover:not(.sel) { border-color: var(--border-strong); }
+.week-day.sel { color: var(--accent-ink); border-color: transparent; }
+.week-day .wd { font-size: 11px; }
+.week-day .wn { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.week-day .dot-s { width: 5px; height: 5px; border-radius: 50%; margin-top: 3px; background: transparent; }
+.week-day .dot-s.on { background: var(--accent); }
+.week-day.sel .dot-s.on { background: var(--accent-ink); }
+.week-bg { position: absolute; inset: 0; z-index: -1; border-radius: 14px; background: var(--accent); }
+.streak { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+/* ===== Textos (ajuda) ===== */
+.doc-card { display: grid; gap: 10px; }
+.doc-card h3 { font-size: 16px; }
+.doc-card p { color: var(--text-2); font-size: 14px; line-height: 1.6; }

@@ -1,4 +1,4 @@
-import type { Goal, Transaction, Category } from '../store/finance';
+import type { Card, Goal, Transaction, Category } from '../store/finance';
 import { formatMoney, type Currency } from './finance';
 import { formatLongDate, parseDateKey } from './dates';
 
@@ -9,9 +9,18 @@ export interface ExportRow {
   moeda: Currency;
   categoria: string;
   descricao: string;
+  /** "À vista", "Cartão Nubank" ou "Cartão Nubank (2/3)". */
+  pagamento: string;
 }
 
-export const toExportRows = (items: Transaction[], categories: Category[]): ExportRow[] =>
+const paymentLabel = (t: Transaction, cards: Card[]): string => {
+  if (!t.cardId) return t.type === 'income' ? '' : 'À vista';
+  const name = cards.find((c) => c.id === t.cardId)?.name ?? 'cartão';
+  const parcel = t.installmentNumber && t.installmentTotal ? ` (${t.installmentNumber}/${t.installmentTotal})` : '';
+  return `Cartão ${name}${parcel}`;
+};
+
+export const toExportRows = (items: Transaction[], categories: Category[], cards: Card[] = []): ExportRow[] =>
   items.map((t) => ({
     data: t.occurredOn,
     tipo: t.type === 'income' ? 'Receita' : 'Despesa',
@@ -19,11 +28,14 @@ export const toExportRows = (items: Transaction[], categories: Category[]): Expo
     moeda: t.currency,
     categoria: categories.find((c) => c.id === t.categoryId)?.name ?? 'Sem categoria',
     descricao: t.description,
+    pagamento: paymentLabel(t, cards),
   }));
 
+/** Texto que começa com = + - @ viraria fórmula no Excel: o apóstrofo faz a célula ser lida como texto. */
+const neutralizeFormula = (value: string): string => (/^[=+\-@\t\r]/.test(value) ? `'${value}` : value);
+
 const csvCell = (value: string | number): string => {
-  // Texto que começa com = + - @ viraria fórmula no Excel: o apóstrofo faz a célula ser lida como texto.
-  const text = typeof value === 'string' && /^[=+\-@\t\r]/.test(value) ? `'${value}` : String(value);
+  const text = typeof value === 'string' ? neutralizeFormula(value) : String(value);
   return /[;"\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 };
 
@@ -38,9 +50,9 @@ const triggerDownload = (blob: Blob, fileName: string) => {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 
-/** CSV com ponto e vírgula e BOM, para abrir direto no Excel em português. */
-export const downloadCsv = (rows: ExportRow[], fileName: string): void => {
-  const header = ['Data', 'Tipo', 'Valor', 'Moeda', 'Categoria', 'Descrição'].join(';');
+/** Conteúdo do CSV: ponto e vírgula e BOM, para abrir direto no Excel em português. */
+export const buildCsv = (rows: ExportRow[]): string => {
+  const header = ['Data', 'Tipo', 'Valor', 'Moeda', 'Categoria', 'Descrição', 'Pagamento'].join(';');
   const lines = rows.map((r) => [
     r.data,
     r.tipo,
@@ -48,13 +60,20 @@ export const downloadCsv = (rows: ExportRow[], fileName: string): void => {
     r.moeda,
     r.categoria,
     r.descricao,
+    r.pagamento,
   ].map(csvCell).join(';'));
-  const content = `\uFEFF${[header, ...lines].join('\r\n')}`;
-  triggerDownload(new Blob([content], { type: 'text/csv;charset=utf-8' }), fileName);
+  return `\uFEFF${[header, ...lines].join('\r\n')}`;
 };
 
-/** Planilha .xlsx com lançamentos e metas. A biblioteca de planilhas só é carregada quando usada. */
-export const downloadXlsx = async (rows: ExportRow[], goals: Goal[], fileName: string): Promise<void> => {
+export const downloadCsv = (rows: ExportRow[], fileName: string): void => {
+  triggerDownload(new Blob([buildCsv(rows)], { type: 'text/csv;charset=utf-8' }), fileName);
+};
+
+/**
+ * Planilha .xlsx com lançamentos e metas, como bytes. A biblioteca (SheetJS, versão oficial do CDN da SheetJS)
+ * só é carregada quando usada. Os textos viram células de texto, nunca fórmulas, mesmo começando com "=".
+ */
+export const buildXlsx = async (rows: ExportRow[], goals: Goal[]): Promise<ArrayBuffer> => {
   const XLSX = await import('xlsx');
   const workbook = XLSX.utils.book_new();
   const transactionsSheet = XLSX.utils.json_to_sheet(rows.map((r) => ({
@@ -64,6 +83,7 @@ export const downloadXlsx = async (rows: ExportRow[], goals: Goal[], fileName: s
     Moeda: r.moeda,
     Categoria: r.categoria,
     Descrição: r.descricao,
+    Pagamento: r.pagamento,
   })));
   XLSX.utils.book_append_sheet(workbook, transactionsSheet, 'Lançamentos');
 
@@ -78,7 +98,15 @@ export const downloadXlsx = async (rows: ExportRow[], goals: Goal[], fileName: s
     XLSX.utils.book_append_sheet(workbook, goalsSheet, 'Metas');
   }
 
-  XLSX.writeFile(workbook, fileName);
+  return XLSX.write(workbook, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer;
+};
+
+export const downloadXlsx = async (rows: ExportRow[], goals: Goal[], fileName: string): Promise<void> => {
+  const bytes = await buildXlsx(rows, goals);
+  triggerDownload(
+    new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    fileName,
+  );
 };
 
 /** Rótulo legível da data para mensagens. */

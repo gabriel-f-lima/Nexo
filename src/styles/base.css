@@ -1,0 +1,67 @@
+/* Tokens de cor e estilos base. Carregado em todas as telas (main.tsx). */
+
+/* ===== Tokens (cores da marca Nexo, tema escuro) ===== */
+:root {
+  --bg: #060807;
+  --bg-2: #0a0e0c;
+  --card: #0f1513;
+  --card-2: #151d19;
+  --active: #1d2824;
+  --border: #212c27;
+  --border-strong: #2e3b35;
+  --text: #F2F6F4;
+  --text-2: #B9C5BF;
+  --muted: #8D9A94;
+  --accent: #5AF0AA;
+  --accent-2: #36D892;
+  --accent-ink: #04130B;
+  --accent-soft: rgba(90, 240, 170, 0.11);
+  --accent-border: rgba(90, 240, 170, 0.34);
+  --blue: #83B5FF;
+  --blue-soft: rgba(131, 181, 255, 0.13);
+  --danger: #FF7185;
+  --danger-soft: rgba(255, 113, 133, 0.11);
+  --warn: #F6A75D;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow: 0 12px 32px -14px rgba(0, 0, 0, 0.75);
+  --shadow-lg: 0 32px 80px -24px rgba(0, 0, 0, 0.85);
+  --ring: 0 0 0 3px rgba(90, 240, 170, 0.2);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --sidebar-w: 272px;
+  --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+}
+
+/* ===== Base ===== */
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { min-height: 100%; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(900px 520px at 85% -12%, rgba(90, 240, 170, 0.07), transparent 62%),
+    radial-gradient(760px 420px at -10% 112%, rgba(131, 181, 255, 0.05), transparent 60%);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior-y: none;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; padding: 0; }
+button:disabled { cursor: not-allowed; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, p { margin: 0; }
+img { display: block; max-width: 100%; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+::selection { background: rgba(90, 240, 170, 0.28); color: var(--text); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }

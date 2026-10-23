@@ -1,51 +1,103 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronLeft, ChevronRight, Download, FileSpreadsheet, Lock, Plus, Tags, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
-import { Header } from '../components/ui';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  BarChart3, ChevronLeft, ChevronRight, CreditCard, Gauge, Lock, Plus, ReceiptText, Scale, Tags, Target, TrendingDown, TrendingUp, Wallet,
+} from 'lucide-react';
+import { Header, Modal } from '../components/ui';
 import TransactionForm from '../components/TransactionForm';
 import CategoryManager from '../components/CategoryManager';
-import GoalsSection from '../components/GoalsSection';
 import Paywall from '../components/Paywall';
 import Plans from '../components/Plans';
+import NoticeBox from '../components/NoticeBox';
+import SelectField from '../components/SelectField';
+import QuickEntry from '../components/planning/QuickEntry';
+import { InsightList, Tabs, type TabItem } from '../components/planning/ui';
+import CardsTab from '../components/finance/CardsTab';
+import BillsTab from '../components/finance/BillsTab';
+import BudgetsTab from '../components/finance/BudgetsTab';
+import ChartsTab from '../components/finance/ChartsTab';
 import { LIMITS, type Limits } from '../lib/billing';
 import { useTier } from '../lib/useTier';
-import { BalanceLine, BarsChart, DonutChart, type BarDatum, type LinePoint, type SliceDatum } from '../components/charts';
 import { useFinanceStore, type Transaction } from '../store/finance';
 import { canEditFinanceDay } from '../lib/rules';
 import { notify } from '../lib/toast';
 import { useAuthStore } from '../store/auth';
-import { MONTHS, formatLongDate, parseDateKey } from '../lib/dates';
-import { CURRENCIES, formatMoney, monthKeyOf, totalsByCurrency, type Currency } from '../lib/finance';
-import { PERIODS, inBucket, periodRange, shiftReference, type Period } from '../lib/period';
-import { downloadCsv, downloadXlsx, toExportRows } from '../lib/export';
+import { addMonthsToMonth, formatLongDate, formatMonthName, formatMonthTitle, monthOfKey, parseDateKey, toISODate } from '../lib/dates';
+import { centsToInput, formatMoney, parseAmountToCents, totalsByCurrency, type Currency } from '../lib/finance';
+import { availableBalance } from '../lib/ledger';
+import { cardInvoices } from '../lib/cards';
+import { billsToWatch } from '../lib/bills';
+import { buildCoach, usedCurrencies, useSnapshot } from '../lib/derived';
+import { monthlyEntriesMessage } from '../lib/limits';
+import '../styles/planning.css';
 
 const NO_CATEGORY_COLOR = '#A1ADA6';
+type Tab = 'resumo' | 'cartoes' | 'contas' | 'orcamentos' | 'graficos';
+const TAB_VALUES: Tab[] = ['resumo', 'cartoes', 'contas', 'orcamentos', 'graficos'];
 
-/** Financeiro: lançamentos, gráficos por período, metas e exportação. */
-function FinancasContent({ limits }: { limits: Limits }) {
+/** Financeiro: saldo, lançamentos, cartões e faturas, contas, orçamentos e gráficos. */
+function FinancasContent({ limits, tier }: { limits: Limits; tier: 'basico' | 'pro' }) {
+  const [params, setParams] = useSearchParams();
+  const tab = (TAB_VALUES as string[]).includes(params.get('aba') ?? '') ? params.get('aba') as Tab : 'resumo';
+  const setTab = (next: Tab) => setParams(next === 'resumo' ? {} : { aba: next }, { replace: true });
+  const [paywall, setPaywall] = useState<string | null>(null);
+  const snapshot = useSnapshot(true);
+  const insights = useMemo(() => buildCoach(snapshot), [snapshot]);
+  const alerts = (prefix: RegExp) => insights.some((i) => i.tone === 'alert' && prefix.test(i.id));
+
+  const items: TabItem<Tab>[] = [
+    { value: 'resumo', label: 'Resumo', icon: <Wallet size={15} /> },
+    { value: 'cartoes', label: 'Cartões', icon: <CreditCard size={15} />, alert: alerts(/^(invoice|card)-/) },
+    { value: 'contas', label: 'Contas', icon: <ReceiptText size={15} />, alert: alerts(/^bill-/) },
+    { value: 'orcamentos', label: 'Orçamentos', icon: <Gauge size={15} />, alert: alerts(/^budget-/) },
+    { value: 'graficos', label: 'Gráficos', icon: <BarChart3 size={15} /> },
+  ];
+
+  return (
+    <div className="screen">
+      <Header title="Financeiro" subtitle="Saldo, cartões, contas, orçamentos e gráficos" />
+      <div className="screen-stack">
+        <Tabs items={items} value={tab} onChange={setTab} label="Seções do financeiro" />
+        <motion.div key={tab} className="stack tab-panel" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
+          {tab === 'resumo' ? <OverviewTab tier={tier} insights={insights.filter((i) => !/^(streak|goal-done)/.test(i.id))} onPaywall={setPaywall} /> : null}
+          {tab === 'cartoes' ? <CardsTab /> : null}
+          {tab === 'contas' ? <BillsTab /> : null}
+          {tab === 'orcamentos' ? <BudgetsTab /> : null}
+          {tab === 'graficos' ? <ChartsTab limits={limits} onPaywall={setPaywall} /> : null}
+        </motion.div>
+      </div>
+      <Paywall open={paywall !== null} onClose={() => setPaywall(null)} title="Recurso dos planos" message={paywall ?? ''} />
+    </div>
+  );
+}
+
+function OverviewTab({ tier, insights, onPaywall }: {
+  tier: 'basico' | 'pro';
+  insights: ReturnType<typeof buildCoach>;
+  onPaywall: (message: string) => void;
+}) {
+  const navigate = useNavigate();
   const transactions = useFinanceStore((s) => s.transactions);
   const categories = useFinanceStore((s) => s.categories);
+  const cards = useFinanceStore((s) => s.cards);
+  const cardPayments = useFinanceStore((s) => s.cardPayments);
+  const bills = useFinanceStore((s) => s.bills);
   const goals = useFinanceStore((s) => s.goals);
   const loaded = useFinanceStore((s) => s.loaded);
+  const finance = useFinanceStore();
   const requireAuth = useAuthStore((s) => s.requireAuth);
   const user = useAuthStore((s) => s.user);
+  const today = toISODate();
 
-  const [month, setMonth] = useState(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
+  const [month, setMonth] = useState(monthOfKey(today));
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
-  const [paywall, setPaywall] = useState<string | null>(null);
+  const [adjusting, setAdjusting] = useState<Currency | null>(null);
 
-  const [period, setPeriod] = useState<Period>('month');
-  const [ref, setRef] = useState(() => new Date());
-  const [currency, setCurrency] = useState<Currency>('BRL');
-
-  const key = monthKeyOf(month);
-  const monthItems = useMemo(() => transactions.filter((t) => t.occurredOn.startsWith(key)), [transactions, key]);
-  const totals = useMemo(() => totalsByCurrency(monthItems), [monthItems]);
+  const monthItems = useMemo(() => transactions.filter((t) => monthOfKey(t.occurredOn) === month), [transactions, month]);
+  const monthTotals = useMemo(() => totalsByCurrency(monthItems), [monthItems]);
   const groups = useMemo(() => {
     const map = new Map<string, Transaction[]>();
     monthItems.forEach((t) => {
@@ -56,72 +108,24 @@ function FinancasContent({ limits }: { limits: Limits }) {
     return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }, [monthItems]);
 
-  /* Gráficos: período e moeda escolhidos */
-  const range = useMemo(() => periodRange(period, ref), [period, ref]);
-  const periodItems = useMemo(
-    () => transactions.filter((t) => t.occurredOn >= range.start && t.occurredOn <= range.end && t.currency === currency),
-    [transactions, range, currency],
-  );
-  const periodTotals = useMemo(() => totalsByCurrency(periodItems)[0], [periodItems]);
-
-  const barData: BarDatum[] = useMemo(() => range.buckets.map((b) => {
-    const inside = periodItems.filter((t) => inBucket(t.occurredOn, b));
-    return {
-      label: b.label,
-      income: inside.filter((t) => t.type === 'income').reduce((s, t) => s + t.amountCents, 0),
-      expense: inside.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amountCents, 0),
-    };
-  }), [range, periodItems]);
-
-  const balancePoints: LinePoint[] = useMemo(() => {
-    let running = 0;
-    return range.buckets.map((b) => {
-      const inside = periodItems.filter((t) => inBucket(t.occurredOn, b));
-      running += inside.reduce((s, t) => s + (t.type === 'income' ? t.amountCents : -t.amountCents), 0);
-      return { label: b.label, value: running / 100 };
-    });
-  }, [range, periodItems]);
-
-  const slices: SliceDatum[] = useMemo(() => {
-    const expenses = periodItems.filter((t) => t.type === 'expense');
-    const byCategory = new Map<string, number>();
-    expenses.forEach((t) => {
-      const k = t.categoryId ?? '__none__';
-      byCategory.set(k, (byCategory.get(k) ?? 0) + t.amountCents);
-    });
-    return Array.from(byCategory.entries())
-      .map(([id, value]) => {
-        const category = categories.find((c) => c.id === id);
-        return {
-          name: category?.name ?? 'Sem categoria',
-          color: category?.color ?? NO_CATEGORY_COLOR,
-          value: value / 100,
-        };
-      })
-      .sort((a, b) => b.value - a.value);
-  }, [periodItems, categories]);
-
-  const exportName = `nexo-financeiro-${range.start}-a-${range.end}`;
-  const exportAll = () => transactions.filter((t) => t.occurredOn >= range.start && t.occurredOn <= range.end);
-
-  const doCsv = () => {
-    if (!limits.csvExport) { setPaywall('A exportação faz parte dos planos pagos.'); return; }
-    const rows = toExportRows(exportAll(), categories);
-    if (!rows.length) return;
-    downloadCsv(rows, `${exportName}.csv`);
-  };
-  const doXlsx = () => {
-    if (!limits.xlsxExport) { setPaywall('A exportação em planilha Excel faz parte do plano Pro.'); return; }
-    const rows = toExportRows(exportAll(), categories);
-    if (!rows.length) return;
-    downloadXlsx(rows, goals, `${exportName}.xlsx`).catch(() => notify('Não foi possível gerar a planilha. Tente novamente.', 'error'));
-  };
+  const currencies = usedCurrencies(finance);
+  const cardCurrency = (id: string) => cards.find((c) => c.id === id)?.currency;
+  const balances = (currencies.length ? currencies : (['BRL'] as Currency[])).map((currency) => {
+    const balance = availableBalance(transactions, cardPayments, cardCurrency, currency, today);
+    const invoicesDue = cards.filter((c) => c.currency === currency && !c.archived)
+      .flatMap((c) => cardInvoices(c, transactions, cardPayments, today))
+      .filter((i) => i.status === 'closed' || i.status === 'overdue')
+      .reduce((s, i) => s + i.remainingCents, 0);
+    const billsDue = billsToWatch(bills.filter((b) => b.currency === currency), transactions, today, 31)
+      .filter((o) => monthOfKey(o.dueDate) <= monthOfKey(today))
+      .reduce((s, o) => s + o.bill.amountCents, 0);
+    const totals = totalsByCurrency(transactions.filter((t) => monthOfKey(t.occurredOn) === monthOfKey(today) && t.currency === currency))[0];
+    return { currency, balance, invoicesDue, billsDue, income: totals?.income ?? 0, expense: totals?.expense ?? 0 };
+  });
 
   const openNew = () => requireAuth(() => {
-    if (limits.monthlyEntries !== null && monthItems.length >= limits.monthlyEntries) {
-      setPaywall(`Seu plano permite até ${limits.monthlyEntries} lançamentos por mês. Assine o Pro para lançamentos ilimitados.`);
-      return;
-    }
+    const limit = monthlyEntriesMessage(tier, transactions.filter((t) => monthOfKey(t.occurredOn) === monthOfKey(today)).length);
+    if (limit) { onPaywall(limit); return; }
     setEditing(null);
     setFormOpen(true);
   });
@@ -129,190 +133,147 @@ function FinancasContent({ limits }: { limits: Limits }) {
     if (!canEditFinanceDay(t.occurredOn)) { notify('Lançamentos de dias anteriores a ontem ficam só para consulta.', 'info'); return; }
     setEditing(t); setFormOpen(true);
   };
-  const categoryName = (id: string | null) => categories.find((c) => c.id === id);
 
   return (
-    <div className="screen">
-      <Header title="Financeiro" subtitle="Receitas, despesas, metas e gráficos" />
-
-      <div className="screen-stack">
-        {/* Mês atual: lista e totais */}
-        <div className="cal" style={{ padding: 12 }}>
+    <>
+      {balances.map((b) => (
+        <motion.section key={b.currency} className="hero-card money-hero" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <div className="row between">
-            <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} aria-label="Mês anterior">
-              <ChevronLeft size={17} />
-            </motion.button>
-            <span className="cal-title">{MONTHS[month.getMonth()]} {month.getFullYear()}</span>
-            <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} aria-label="Próximo mês">
-              <ChevronRight size={17} />
-            </motion.button>
+            <span className="label"><Wallet size={15} /> Saldo disponível hoje · {b.currency}</span>
+            <button type="button" className="link-btn" style={{ fontSize: 12.5, padding: 0 }} onClick={() => requireAuth(() => setAdjusting(b.currency))}><Scale size={13} style={{ verticalAlign: -2 }} /> Ajustar</button>
           </div>
-        </div>
-
-        {totals.length ? totals.map((total) => (
-          <motion.div key={total.currency} className="card" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
-            <div className="row between" style={{ marginBottom: 12 }}>
-              <span className="eyebrow">{total.currency}</span>
-              <span className="text-2" style={{ fontSize: 12 }}>Saldo do mês</span>
-            </div>
-            <div className="stat-line" style={{ color: total.balance < 0 ? 'var(--danger)' : 'var(--text)' }}>
-              {formatMoney(total.balance, total.currency)}
-            </div>
-            <div className="row gap-md" style={{ marginTop: 14 }}>
-              <div className="grow">
-                <div className="row gap-sm text-2" style={{ fontSize: 12 }}><TrendingUp size={14} color="var(--accent)" /> Receitas</div>
-                <div style={{ color: 'var(--accent)', fontWeight: 700, marginTop: 2 }}>{formatMoney(total.income, total.currency)}</div>
-              </div>
-              <div className="grow">
-                <div className="row gap-sm text-2" style={{ fontSize: 12 }}><TrendingDown size={14} color="var(--danger)" /> Despesas</div>
-                <div style={{ color: 'var(--danger)', fontWeight: 700, marginTop: 2 }}>{formatMoney(total.expense, total.currency)}</div>
-              </div>
-            </div>
-          </motion.div>
-        )) : (
-          <div className="empty-card">
-            <Wallet size={24} color="var(--muted)" />
-            <strong>Nenhum lançamento em {MONTHS[month.getMonth()]}</strong>
-            <span>Registre receitas e despesas para ver o resumo do mês.</span>
+          <div className={`value${b.balance < 0 ? ' negative' : ''}`}>{formatMoney(b.balance, b.currency)}</div>
+          <div className="money-split">
+            <div><div className="k"><TrendingUp size={12} color="var(--accent)" /> Receitas do mês</div><div className="v" style={{ color: 'var(--accent)' }}>{formatMoney(b.income, b.currency)}</div></div>
+            <div><div className="k"><TrendingDown size={12} color="var(--danger)" /> Gastos do mês</div><div className="v">{formatMoney(b.expense, b.currency)}</div></div>
+            {b.invoicesDue ? <div><div className="k"><CreditCard size={12} /> Faturas a pagar</div><div className="v" style={{ color: 'var(--warn)' }}>{formatMoney(b.invoicesDue, b.currency)}</div></div> : null}
+            {b.billsDue ? <div><div className="k"><ReceiptText size={12} /> Contas a pagar</div><div className="v" style={{ color: 'var(--warn)' }}>{formatMoney(b.billsDue, b.currency)}</div></div> : null}
           </div>
-        )}
+        </motion.section>
+      ))}
 
-        <div className="row gap-sm">
-          <motion.button type="button" className="btn btn-primary grow" whileTap={{ scale: 0.98 }} onClick={openNew}>
-            <Plus size={18} /> Novo lançamento
-          </motion.button>
-          <motion.button type="button" className="btn btn-ghost" whileTap={{ scale: 0.98 }} onClick={() => requireAuth(() => setCategoriesOpen(true))}>
-            <Tags size={17} /> Categorias
-          </motion.button>
-        </div>
+      <QuickEntry />
 
-        {user && !loaded ? <p className="muted center" style={{ fontSize: 13 }}>Carregando lançamentos…</p> : null}
+      <InsightList insights={insights} limit={3} />
 
-        {groups.map(([day, items]) => (
-          <div key={day} style={{ display: 'grid', gap: 8 }}>
-            <div className="section-hint" style={{ marginTop: 6 }}>{formatLongDate(parseDateKey(day))}</div>
-            {items.map((t) => {
-              const category = categoryName(t.categoryId);
-              const income = t.type === 'income';
-              return (
-                <motion.button key={t.id} type="button" className="task-row" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} whileTap={{ scale: 0.98 }} onClick={() => openEdit(t)}>
-                  <span style={{ width: 12, height: 12, borderRadius: '50%', background: category?.color ?? NO_CATEGORY_COLOR, flexShrink: 0 }} />
-                  <span className="grow" style={{ minWidth: 0 }}>
-                    <span style={{ display: 'block', fontWeight: 600, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {t.description || category?.name || 'Sem descrição'}
-                    </span>
-                    <span className="muted" style={{ fontSize: 12 }}>{category?.name ?? 'Sem categoria'}</span>
-                  </span>
-                  <span style={{ fontWeight: 700, fontSize: 14, color: income ? 'var(--accent)' : 'var(--text)', whiteSpace: 'nowrap' }}>
-                    {income ? '+' : '−'} {formatMoney(t.amountCents, t.currency)}
-                  </span>
-                </motion.button>
-              );
-            })}
-          </div>
-        ))}
-
-        {/* Gráficos */}
-        <div className="section-head" style={{ marginTop: 10 }}>
-          <div>
-            <div className="section-title">Gráficos</div>
-            <div className="section-hint">Totais separados por moeda</div>
-          </div>
-        </div>
-
-        <div className="row gap-sm" style={{ overflowX: 'auto', paddingBottom: 2 }}>
-          {PERIODS.map((p) => (
-            <button key={p.value} type="button" className="chip" aria-pressed={period === p.value} onClick={() => (limits.periods.includes(p.value) ? setPeriod(p.value) : setPaywall(`A análise por ${p.label.toLowerCase()} está disponível no plano Pro.`))}
-              style={period === p.value ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}>
-              {p.label}{limits.periods.includes(p.value) ? null : <Lock size={12} style={{ marginLeft: 6, verticalAlign: 'middle' }} />}
-            </button>
-          ))}
-        </div>
-
-        <div className="row between" style={{ gap: 8 }}>
-          <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setRef(shiftReference(period, ref, -1))} aria-label="Período anterior">
-            <ChevronLeft size={17} />
-          </motion.button>
-          <span className="text-2 center" style={{ fontSize: 13, flex: 1 }}>{range.label.charAt(0).toUpperCase() + range.label.slice(1)}</span>
-          <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setRef(shiftReference(period, ref, 1))} aria-label="Próximo período">
-            <ChevronRight size={17} />
-          </motion.button>
-        </div>
-
-        <div className="row gap-sm">
-          {CURRENCIES.map((c) => (
-            <button key={c} type="button" className="grow" aria-pressed={currency === c} onClick={() => setCurrency(c)}
-              style={{ minHeight: 38, borderRadius: 11, fontWeight: 700, fontSize: 13,
-                background: currency === c ? 'var(--accent-soft)' : 'var(--bg)',
-                border: `1px solid ${currency === c ? 'var(--accent)' : 'var(--border)'}`,
-                color: currency === c ? 'var(--accent)' : 'var(--text-2)' }}>
-              {c}
-            </button>
-          ))}
-        </div>
-
-        <div className="card" style={{ display: 'grid', gap: 12 }}>
-          <div className="row between">
-            <span className="text-2" style={{ fontSize: 13 }}>Receitas x despesas</span>
-            <span className="text-2" style={{ fontSize: 12 }}>
-              <span style={{ color: 'var(--accent)' }}>■</span> receita <span style={{ color: 'var(--danger)', marginLeft: 6 }}>■</span> despesa
-            </span>
-          </div>
-          {periodItems.length ? <BarsChart data={barData} /> : <p className="muted center" style={{ fontSize: 13, padding: '24px 0' }}>Sem lançamentos em {currency} neste período.</p>}
-          {periodTotals ? (
-            <div className="row" style={{ justifyContent: 'space-between', fontSize: 13 }}>
-              <span>Saldo: <strong style={{ color: periodTotals.balance < 0 ? 'var(--danger)' : 'var(--accent)' }}>{formatMoney(periodTotals.balance, currency)}</strong></span>
-              <span className="text-2">Despesas: {formatMoney(periodTotals.expense, currency)}</span>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="card" style={{ display: 'grid', gap: 12 }}>
-          <span className="text-2" style={{ fontSize: 13 }}>Saldo acumulado</span>
-          {periodItems.length ? <BalanceLine points={balancePoints} /> : null}
-        </div>
-
-        <div className="card" style={{ display: 'grid', gap: 14 }}>
-          <span className="text-2" style={{ fontSize: 13 }}>Gastos por categoria</span>
-          {slices.length ? (
-            <>
-              <DonutChart slices={slices} centerLabel="Despesas" centerValue={formatMoney(periodTotals?.expense ?? 0, currency)} />
-              <div style={{ display: 'grid', gap: 8 }}>
-                {slices.map((s) => {
-                  const pct = periodTotals?.expense ? Math.round((s.value * 100) / (periodTotals.expense / 100)) : 0;
-                  return (
-                    <div key={s.name} className="row gap-sm" style={{ fontSize: 13 }}>
-                      <span style={{ width: 10, height: 10, borderRadius: '50%', background: s.color }} />
-                      <span className="grow">{s.name}</span>
-                      <span className="text-2">{pct}%</span>
-                      <strong>{formatMoney(Math.round(s.value * 100), currency)}</strong>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          ) : (
-            <p className="muted center" style={{ fontSize: 13, padding: '16px 0' }}>Sem despesas em {currency} neste período.</p>
-          )}
-        </div>
-
-        <div className="row gap-sm">
-          <motion.button type="button" className="btn btn-ghost grow" whileTap={{ scale: 0.98 }} onClick={doCsv} disabled={!exportAll().length}>
-            <Download size={17} /> CSV
-          </motion.button>
-          <motion.button type="button" className="btn btn-ghost grow" whileTap={{ scale: 0.98 }} onClick={doXlsx} disabled={!exportAll().length}>
-            <FileSpreadsheet size={17} /> Planilha
-          </motion.button>
-        </div>
-        <p className="muted center" style={{ fontSize: 12 }}>Exporta todos os lançamentos do período selecionado, em todas as moedas.</p>
-
-        <GoalsSection />
+      <div className="row gap-sm">
+        <motion.button type="button" className="btn btn-primary grow" whileTap={{ scale: 0.98 }} onClick={openNew}><Plus size={18} /> Novo lançamento</motion.button>
+        <motion.button type="button" className="btn btn-ghost" whileTap={{ scale: 0.98 }} onClick={() => requireAuth(() => setCategoriesOpen(true))}><Tags size={17} /> Categorias</motion.button>
       </div>
+
+      <div className="cal" style={{ padding: 12 }}>
+        <div className="row between">
+          <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setMonth(addMonthsToMonth(month, -1))} aria-label="Mês anterior"><ChevronLeft size={17} /></motion.button>
+          <span className="cal-title" style={{ textTransform: 'none' }}>{formatMonthTitle(month)}</span>
+          <motion.button type="button" className="icon-btn plain sm" whileTap={{ scale: 0.9 }} onClick={() => setMonth(addMonthsToMonth(month, 1))} aria-label="Próximo mês"><ChevronRight size={17} /></motion.button>
+        </div>
+        {monthTotals.length ? (
+          <div className="row gap-sm" style={{ marginTop: 10, flexWrap: 'wrap', justifyContent: 'center', fontSize: 12.5 }}>
+            {monthTotals.map((t) => (
+              <span key={t.currency} className="text-2">
+                {t.currency}: <span style={{ color: 'var(--accent)' }}>+{formatMoney(t.income, t.currency)}</span> · <span style={{ color: 'var(--danger)' }}>−{formatMoney(t.expense, t.currency)}</span> · resultado <strong style={{ color: t.balance < 0 ? 'var(--danger)' : 'var(--text)' }}>{formatMoney(t.balance, t.currency)}</strong>
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      {user && !loaded ? <p className="muted center" style={{ fontSize: 13 }}>Carregando lançamentos…</p> : null}
+
+      {groups.length ? groups.map(([day, list]) => (
+        <div key={day} className="stack" style={{ gap: 8 }}>
+          <div className="section-hint" style={{ marginTop: 6 }}>{formatLongDate(parseDateKey(day))}{day > today ? ' · agendado' : ''}</div>
+          {list.map((t) => {
+            const category = categories.find((c) => c.id === t.categoryId);
+            const card = t.cardId ? cards.find((c) => c.id === t.cardId) : undefined;
+            const income = t.type === 'income';
+            return (
+              <motion.button key={t.id} type="button" className="task-row" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} whileTap={{ scale: 0.98 }} onClick={() => openEdit(t)}>
+                <span style={{ width: 12, height: 12, borderRadius: '50%', background: category?.color ?? NO_CATEGORY_COLOR, flexShrink: 0 }} />
+                <span className="grow" style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', fontWeight: 600, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t.description || category?.name || 'Sem descrição'}
+                  </span>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {category?.name ?? 'Sem categoria'}
+                    <span className="tx-tags">
+                      {card ? <span className="tx-tag"><CreditCard size={10} /> {card.name}{t.installmentTotal ? ` ${t.installmentNumber}/${t.installmentTotal}` : ''}</span> : null}
+                      {t.billId || t.billPeriod ? <span className="tx-tag bill"><ReceiptText size={10} /> conta</span> : null}
+                    </span>
+                  </span>
+                </span>
+                <span style={{ fontWeight: 700, fontSize: 14, color: income ? 'var(--accent)' : 'var(--text)', whiteSpace: 'nowrap' }}>
+                  {income ? '+' : '−'} {formatMoney(t.amountCents, t.currency)}
+                </span>
+              </motion.button>
+            );
+          })}
+        </div>
+      )) : (
+        <div className="empty-card">
+          <Wallet size={24} color="var(--muted)" />
+          <strong>Nenhum lançamento em {formatMonthName(month)}</strong>
+          <span>Use o registro rápido acima ou o botão Novo lançamento.</span>
+        </div>
+      )}
+
+      <button type="button" className="tile" onClick={() => navigate('/app/metas')}>
+        <span className="row gap-sm"><span className="tile-icon"><Target size={16} /></span><strong className="grow">Metas financeiras</strong><ChevronRight size={16} className="muted" /></span>
+        <span className="tile-label">
+          {goals.length
+            ? `${goals.length} ${goals.length === 1 ? 'meta' : 'metas'} · agora em Metas, junto com objetivos e metas de sequência.`
+            : 'Crie metas para juntar dinheiro e ligue cada uma à agenda e à rotina em Metas.'}
+        </span>
+      </button>
 
       <TransactionForm open={formOpen} onClose={() => setFormOpen(false)} editing={editing} />
       <CategoryManager open={categoriesOpen} onClose={() => setCategoriesOpen(false)} />
-      <Paywall open={paywall !== null} onClose={() => setPaywall(null)} title="Recurso dos planos" message={paywall ?? ''} />
-    </div>
+      <Modal open={adjusting !== null} onClose={() => setAdjusting(null)} title="Ajustar saldo">
+        {adjusting ? <AdjustBalance currency={adjusting} current={balances.find((b) => b.currency === adjusting)?.balance ?? 0} onDone={() => setAdjusting(null)} onPaywall={onPaywall} tier={tier} /> : null}
+      </Modal>
+    </>
+  );
+}
+
+/** Iguala o saldo do Nexo ao do banco com um lançamento de ajuste (receita ou despesa pela diferença). */
+function AdjustBalance({ currency, current, onDone, onPaywall, tier }: {
+  currency: Currency; current: number; onDone: () => void; onPaywall: (message: string) => void; tier: 'basico' | 'pro';
+}) {
+  const addTransaction = useFinanceStore((s) => s.addTransaction);
+  const transactions = useFinanceStore((s) => s.transactions);
+  const [value, setValue] = useState(centsToInput(Math.abs(current)));
+  const [negative, setNegative] = useState(current < 0);
+  const [error, setError] = useState('');
+
+  const save = (event: FormEvent) => {
+    event.preventDefault();
+    const raw = value.trim() === '0' || value.trim() === '0,00' ? 0 : parseAmountToCents(value);
+    if (raw === null) { setError('Informe o saldo do seu banco, como 1.250,00.'); return; }
+    const target = negative ? -raw : raw;
+    const diff = target - current;
+    if (diff === 0) { onDone(); return; }
+    const today = toISODate();
+    const limit = monthlyEntriesMessage(tier, transactions.filter((t) => monthOfKey(t.occurredOn) === monthOfKey(today)).length);
+    if (limit) { onPaywall(limit); return; }
+    addTransaction({
+      type: diff > 0 ? 'income' : 'expense', amountCents: Math.abs(diff), currency, categoryId: null,
+      occurredOn: today, description: 'Ajuste de saldo',
+    });
+    notify(`Saldo ajustado para ${formatMoney(target, currency)}.`, 'success');
+    onDone();
+  };
+
+  return (
+    <form onSubmit={save} style={{ display: 'grid', gap: 12 }}>
+      <p className="text-2" style={{ fontSize: 13.5 }}>Quanto você tem hoje na conta (em {currency})? O Nexo registra a diferença como “Ajuste de saldo”.</p>
+      <div className="row gap-sm">
+        <SelectField label="Sinal" width={110} value={negative ? '-' : '+'} onChange={(next) => setNegative(next === '-')} options={[{ value: '+', label: 'Positivo' }, { value: '-', label: 'Negativo' }]} />
+        <input className="input grow" value={value} onChange={(e) => setValue(e.target.value)} inputMode="decimal" aria-label="Saldo atual" autoFocus />
+      </div>
+      <NoticeBox>Hoje o Nexo calcula {formatMoney(current, currency)}: receitas, menos despesas à vista e faturas pagas, até hoje.</NoticeBox>
+      {error ? <p className="error">{error}</p> : null}
+      <motion.button type="submit" whileTap={{ scale: 0.98 }} className="btn btn-primary btn-block">Ajustar saldo</motion.button>
+    </form>
   );
 }
 
@@ -323,24 +284,25 @@ export default function Financas() {
   if (tier === 'loading') {
     return (
       <div className="screen">
-        <Header title="Controle financeiro" subtitle="Carregando seu plano…" />
+        <Header title="Financeiro" subtitle="Carregando seu plano…" />
         <div className="loading-inline" role="status" aria-label="Carregando"><div className="spinner" /></div>
       </div>
     );
   }
-  if (!LIMITS[tier].finance) return <FinanceLocked />;
-  return <FinancasContent limits={LIMITS[tier]} />;
+  if (tier === 'free' || !LIMITS[tier].finance) return <FinanceLocked />;
+  return <FinancasContent limits={LIMITS[tier]} tier={tier} />;
 }
 
 function FinanceLocked() {
   return (
     <div className="screen">
-      <Header title="Controle financeiro" subtitle="Disponível nos planos pagos" />
+      <Header title="Financeiro" subtitle="Disponível nos planos pagos" />
       <div className="screen-stack">
         <div className="card" style={{ display: 'grid', gap: 8 }}>
-          <div className="row gap-sm"><Lock size={16} color="var(--accent)" /><strong>Gestão financeira</strong></div>
+          <div className="row gap-sm"><Lock size={16} color="var(--accent)" /><strong>Gestão financeira completa</strong></div>
           <p className="text-2" style={{ fontSize: 14, lineHeight: 1.5 }}>
-            Lançamentos, gráficos, metas e exportação. No Básico você registra até {LIMITS.basico.monthlyEntries} lançamentos por mês; no Pro, sem limite.
+            Saldo disponível, cartões de crédito com fechamento e vencimento de fatura, contas a pagar com aviso, orçamentos por categoria,
+            gráficos e exportação. No Básico você registra até {LIMITS.basico.monthlyEntries} lançamentos por mês; no Pro, sem limite.
           </p>
         </div>
         <Plans />
@@ -348,3 +310,4 @@ function FinanceLocked() {
     </div>
   );
 }
+

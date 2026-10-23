@@ -1,9 +1,20 @@
 import { supabase, supabasePublishableKey, supabaseUrl } from './supabase';
-import { formatTime, toISODate } from './dates';
+import { formatTime, monthOfKey, toISODate } from './dates';
 import { confirmAction } from './confirm';
 import { useDataStore, type ChatMessage } from '../store/data';
 import { useFinanceStore } from '../store/finance';
-import { CURRENCIES, formatMoney, monthKeyOf, parseAmountToCents, totalsByCurrency, type Currency } from './finance';
+import { useProgressStore } from '../store/progress';
+import { CURRENCIES, formatMoney, parseAmountToCents, totalsByCurrency, type Currency } from './finance';
+import { currentTier, LIMITS } from './billing';
+import { canEditFinanceDay } from './rules';
+import { matchCategory, monthlyEntriesMessage } from './limits';
+import { guessCategories } from '../../supabase/functions/_shared/quickEntry';
+import { BILL_STATUS_LABEL, billsOfMonth, billsToWatch } from './bills';
+import { INVOICE_STATUS_LABEL, cardInvoices, cardUsage, invoiceMonthFor } from './cards';
+import { availableBalance, budgetStatus } from './ledger';
+import { buildCoach, buildHealth, buildWeekly, currentSnapshot, usedCurrencies } from './derived';
+import { currentStreak } from './streaks';
+import { objectiveProgress } from './objectives';
 
 /* Cliente do assistente: mesmo contrato da função Edge "nexo-assistant" usada pelo app. */
 
@@ -43,6 +54,27 @@ const parseLocalDateTime = (date: string, time: string): Date => {
     throw new Error('Essa data não existe.');
   }
   return result;
+};
+
+/** Plano com financeiro? Consultado no servidor; sem conta ou sem resposta, não libera. */
+const financeAllowed = async (): Promise<boolean> => {
+  const userId = useDataStore.getState().userId;
+  if (!userId) return false;
+  try {
+    return LIMITS[await currentTier(userId)].finance;
+  } catch {
+    return false;
+  }
+};
+
+const FINANCE_LOCKED = { ok: false, message: 'O controle financeiro faz parte dos planos pagos. O usuário pode assinar em Financeiro.' };
+
+const optionalString = (args: ToolArgs, key: string): string => (typeof args[key] === 'string' ? (args[key] as string).trim() : '');
+
+const currencyArg = (args: ToolArgs, key = 'currency'): Currency => {
+  const value = optionalString(args, key).toUpperCase() || 'BRL';
+  if (!(CURRENCIES as readonly string[]).includes(value)) throw new Error('Moeda aceita: BRL, USD ou EUR.');
+  return value as Currency;
 };
 
 const uniqueMatch = <T extends { id: string }>(items: T[], pick: (item: T) => string, value: string, label: string) => {
@@ -216,20 +248,214 @@ export const executeAssistantTool = async (name: string, args: ToolArgs): Promis
       if (type !== 'income' && type !== 'expense') throw new Error('O tipo deve ser income (receita) ou expense (despesa).');
       const cents = parseAmountToCents(stringArg(args, 'amount'));
       if (cents === null) throw new Error('Valor inválido. Use, por exemplo, 25,90.');
-      const currency = stringArg(args, 'currency').toUpperCase();
-      if (!(CURRENCIES as readonly string[]).includes(currency)) throw new Error('Moeda aceita: BRL, USD ou EUR.');
+      let currency = currencyArg(args);
       const date = stringArg(args, 'date');
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('A data precisa estar no formato AAAA-MM-DD.');
-      const categoryName = typeof args.category === 'string' ? args.category.trim() : '';
-      const category = categoryName
-        ? finance.categories.find((c) => normalize(c.name) === normalize(categoryName) && c.kind === type)
-        : undefined;
-      const description = typeof args.description === 'string' ? args.description.trim().slice(0, 120) : '';
-      finance.addTransaction({
-        type, amountCents: cents, currency: currency as Currency,
-        categoryId: category?.id ?? null, occurredOn: date, description,
+      if (!canEditFinanceDay(date)) return { ok: false, message: 'Só dá para lançar hoje, ontem ou datas futuras. Dias anteriores ficam só para consulta.' };
+      if (!(await financeAllowed())) return FINANCE_LOCKED;
+      const userId = useDataStore.getState().userId as string;
+      const limit = monthlyEntriesMessage(await currentTier(userId), finance.transactions.filter((t) => monthOfKey(t.occurredOn) === monthOfKey(date)).length);
+      if (limit) return { ok: false, message: limit };
+
+      const description = optionalString(args, 'description').slice(0, 120);
+      const categoryName = optionalString(args, 'category');
+      const category = matchCategory(finance.categories, type, categoryName || description, guessCategories(`${categoryName} ${description}`));
+
+      let cardId: string | null = null;
+      let installments = 1;
+      if (type === 'expense' && optionalString(args, 'payment') === 'card') {
+        const active = finance.cards.filter((c) => !c.archived);
+        const cardName = optionalString(args, 'card');
+        const card = cardName ? active.find((c) => normalize(c.name) === normalize(cardName)) ?? active.find((c) => normalize(c.name).includes(normalize(cardName))) : active.length === 1 ? active[0] : undefined;
+        if (!card) {
+          return { ok: false, message: active.length ? `Em qual cartão? Cartões: ${active.map((c) => c.name).join(', ')}.` : 'Nenhum cartão cadastrado. Cadastre em Financeiro › Cartões ou registre como à vista.' };
+        }
+        cardId = card.id;
+        currency = card.currency;
+        const parts = Number(args.installments ?? 1);
+        installments = Number.isInteger(parts) && parts >= 1 && parts <= 48 ? parts : 1;
+      }
+      const saved = finance.addTransaction({
+        type, amountCents: cents, currency, categoryId: category?.id ?? null, occurredOn: date, description, cardId, installments,
       });
-      return { ok: true, type, amount: formatMoney(cents, currency as Currency), date, category: category?.name ?? null };
+      if (!saved) return { ok: false, message: 'Não foi possível registrar o lançamento.' };
+      const card = cardId ? finance.cards.find((c) => c.id === cardId) : undefined;
+      return {
+        ok: true, type, amount: formatMoney(cents, currency), date, category: category?.name ?? null,
+        card: card?.name ?? null, installments, invoice: card ? invoiceMonthFor(date, card) : null,
+      };
+    }
+
+    case 'list_categories': {
+      const { categories } = useFinanceStore.getState();
+      return {
+        expense: categories.filter((c) => c.kind === 'expense').map((c) => c.name),
+        income: categories.filter((c) => c.kind === 'income').map((c) => c.name),
+      };
+    }
+
+    case 'get_financial_overview': {
+      if (!(await financeAllowed())) return FINANCE_LOCKED;
+      const finance = useFinanceStore.getState();
+      const today = toISODate();
+      const currencies = usedCurrencies(finance);
+      const cardCurrency = (id: string) => finance.cards.find((c) => c.id === id)?.currency;
+      const health = buildHealth(currentSnapshot(true));
+      return {
+        today,
+        availableBalance: currencies.map((currency) => ({ currency, amount: formatMoney(availableBalance(finance.transactions, finance.cardPayments, cardCurrency, currency, today), currency) })),
+        billsToWatch: billsToWatch(finance.bills, finance.transactions, today, 7).map((o) => ({
+          name: o.bill.name, amount: formatMoney(o.bill.amountCents, o.bill.currency), due: o.dueDate, status: BILL_STATUS_LABEL[o.status],
+        })),
+        cards: finance.cards.filter((c) => !c.archived).map((card) => {
+          const invoices = cardInvoices(card, finance.transactions, finance.cardPayments, today);
+          const open = invoices.find((i) => i.status === 'open');
+          const pending = invoices.filter((i) => i.status === 'closed' || i.status === 'overdue');
+          return {
+            name: card.name,
+            currentInvoice: open ? { total: formatMoney(open.totalCents, card.currency), closes: open.closing, due: open.due } : null,
+            toPay: pending.map((i) => ({ month: i.month, remaining: formatMoney(i.remainingCents, card.currency), due: i.due, status: INVOICE_STATUS_LABEL[i.status] })),
+          };
+        }),
+        budgets: finance.budgets.map((b) => {
+          const status = budgetStatus(b, finance.transactions, today);
+          return {
+            category: finance.categories.find((c) => c.id === b.categoryId)?.name ?? 'Categoria',
+            spent: formatMoney(status.spentCents + status.scheduledCents, b.currency),
+            limit: formatMoney(b.amountCents, b.currency),
+            exceedsOnDay: status.exceedDay,
+            exceeded: status.state === 'exceeded',
+          };
+        }),
+        financialHealth: health ? { score: health.score, level: health.label, tips: health.factors.map((f) => f.tip).filter(Boolean) } : null,
+      };
+    }
+
+    case 'list_cards': {
+      if (!(await financeAllowed())) return FINANCE_LOCKED;
+      const finance = useFinanceStore.getState();
+      const today = toISODate();
+      return {
+        items: finance.cards.filter((c) => !c.archived).map((card) => {
+          const usage = cardUsage(card, finance.transactions, finance.cardPayments, today);
+          return {
+            name: card.name, currency: card.currency, closingDay: card.closingDay, dueDay: card.dueDay,
+            limit: card.limitCents ? formatMoney(card.limitCents, card.currency) : null,
+            available: usage.availableCents !== null ? formatMoney(usage.availableCents, card.currency) : null,
+            invoices: cardInvoices(card, finance.transactions, finance.cardPayments, today).slice(-6).map((i) => ({
+              month: i.month, total: formatMoney(i.totalCents, card.currency), remaining: formatMoney(i.remainingCents, card.currency),
+              closes: i.closing, due: i.due, status: INVOICE_STATUS_LABEL[i.status],
+            })),
+          };
+        }),
+      };
+    }
+
+    case 'list_bills': {
+      if (!(await financeAllowed())) return FINANCE_LOCKED;
+      const month = optionalString(args, 'month') || monthOfKey(toISODate());
+      if (!/^\d{4}-\d{2}$/.test(month)) throw new Error('O mês precisa estar no formato AAAA-MM.');
+      const finance = useFinanceStore.getState();
+      return {
+        month,
+        items: billsOfMonth(finance.bills, finance.transactions, month, toISODate()).map((o) => ({
+          name: o.bill.name, amount: formatMoney(o.bill.amountCents, o.bill.currency), due: o.dueDate,
+          status: BILL_STATUS_LABEL[o.status], monthly: o.bill.recurrence === 'monthly',
+        })),
+      };
+    }
+
+    case 'create_bill': {
+      if (!(await financeAllowed())) return FINANCE_LOCKED;
+      const finance = useFinanceStore.getState();
+      if (!finance.planningReady) return { ok: false, message: 'As contas a pagar ainda não estão disponíveis nesta conta.' };
+      const name = boundedArg(args, 'name', 60, 'O nome da conta');
+      if (!name) throw new Error('O nome da conta não pode ficar vazio.');
+      const cents = parseAmountToCents(stringArg(args, 'amount'));
+      if (cents === null) throw new Error('Valor inválido. Use, por exemplo, 99,90.');
+      const currency = currencyArg(args);
+      const dueDate = optionalString(args, 'due_date');
+      const dueDay = Number(args.due_day ?? 0);
+      const monthly = !dueDate;
+      if (monthly && (!Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31)) throw new Error('Informe o dia do vencimento (1 a 31) ou a data, para conta única.');
+      if (!monthly && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) throw new Error('A data precisa estar no formato AAAA-MM-DD.');
+      const category = matchCategory(finance.categories, 'expense', optionalString(args, 'category') || name, guessCategories(name));
+      finance.addBill({
+        name, amountCents: cents, currency, categoryId: category?.id ?? null,
+        recurrence: monthly ? 'monthly' : 'once', dueDay: monthly ? dueDay : null, dueDate: monthly ? null : dueDate, startsOn: toISODate(),
+      });
+      return { ok: true, name, amount: formatMoney(cents, currency), due: monthly ? `todo dia ${dueDay}` : dueDate, category: category?.name ?? null };
+    }
+
+    case 'mark_bill_paid': {
+      if (!(await financeAllowed())) return FINANCE_LOCKED;
+      const finance = useFinanceStore.getState();
+      const match = uniqueMatch(finance.bills, (b) => b.name, stringArg(args, 'bill_name'), 'conta');
+      if (!match.item) return { ok: false, message: match.error };
+      const today = toISODate();
+      const period = optionalString(args, 'month') || monthOfKey(today);
+      if (!/^\d{4}-\d{2}$/.test(period)) throw new Error('O mês precisa estar no formato AAAA-MM.');
+      const amountText = optionalString(args, 'amount');
+      const cents = amountText ? parseAmountToCents(amountText) : match.item.amountCents;
+      if (cents === null) throw new Error('Valor inválido.');
+      if (finance.transactions.some((t) => t.billId === match.item?.id && t.billPeriod === period)) return { ok: true, alreadyPaid: true, name: match.item.name, month: period };
+      if (!finance.payBill(match.item.id, period, cents, today)) return { ok: false, message: 'Não foi possível registrar o pagamento.' };
+      return { ok: true, name: match.item.name, month: period, amount: formatMoney(cents, match.item.currency) };
+    }
+
+    case 'set_budget': {
+      if (!(await financeAllowed())) return FINANCE_LOCKED;
+      const finance = useFinanceStore.getState();
+      if (!finance.planningReady) return { ok: false, message: 'Os orçamentos ainda não estão disponíveis nesta conta.' };
+      const categoryName = stringArg(args, 'category');
+      const category = matchCategory(finance.categories, 'expense', categoryName, guessCategories(categoryName));
+      if (!category) return { ok: false, message: `Não encontrei a categoria de despesa “${categoryName}”. Categorias: ${finance.categories.filter((c) => c.kind === 'expense').map((c) => c.name).join(', ')}.` };
+      const cents = parseAmountToCents(stringArg(args, 'amount'));
+      if (cents === null) throw new Error('Valor inválido. Use, por exemplo, 600,00.');
+      const currency = currencyArg(args);
+      finance.setBudget(category.id, currency, cents);
+      return { ok: true, category: category.name, monthlyLimit: formatMoney(cents, currency) };
+    }
+
+    case 'get_weekly_summary': {
+      const allowed = await financeAllowed();
+      const summary = buildWeekly(currentSnapshot(allowed));
+      return { from: summary.start, to: summary.end, lines: allowed ? summary.lines : summary.lines.filter((l) => !/R\$|US\$|€|gast/i.test(l)) };
+    }
+
+    case 'get_coach_tips': {
+      const insights = buildCoach(currentSnapshot(await financeAllowed())).slice(0, 5);
+      return { items: insights.map((i) => ({ title: i.title, text: i.text })) };
+    }
+
+    case 'list_goals': {
+      const finance = useFinanceStore.getState();
+      const data = useDataStore.getState();
+      const today = toISODate();
+      return {
+        financialGoals: finance.goals.map((g) => ({
+          name: g.name, saved: formatMoney(g.savedCents, g.currency), target: formatMoney(g.targetCents, g.currency), deadline: g.deadline,
+        })),
+        objectives: useProgressStore.getState().objectives.map((o) => {
+          const p = objectiveProgress(o, { goals: finance.goals, events: data.events, habits: data.habits }, today);
+          return { title: o.title, targetDate: o.targetDate, status: p.status, progressPercent: Math.round(p.overall * 100), nextSteps: p.nextSteps };
+        }),
+        streakGoals: useProgressStore.getState().streakGoals.map((g) => {
+          const habit = data.habits.find((h) => h.id === g.habitId);
+          return habit ? { habit: habit.name, targetDays: g.targetDays, currentStreak: currentStreak(habit.doneDates, today), achieved: !!g.achievedOn } : null;
+        }).filter(Boolean),
+      };
+    }
+
+    case 'set_streak_goal': {
+      const progress = useProgressStore.getState();
+      if (!progress.ready) return { ok: false, message: 'As metas de sequência ainda não estão disponíveis nesta conta.' };
+      const match = uniqueMatch(useDataStore.getState().habits, (h) => h.name, stringArg(args, 'habit_name'), 'hábito');
+      if (!match.item) return { ok: false, message: match.error };
+      const days = Number(args.days);
+      if (!Number.isInteger(days) || days < 2 || days > 365) throw new Error('Escolha entre 2 e 365 dias.');
+      progress.setStreakGoal(match.item.id, days);
+      return { ok: true, habit: match.item.name, targetDays: days, currentStreak: currentStreak(match.item.doneDates, toISODate()) };
     }
 
     case 'delete_transaction': {
@@ -292,12 +518,15 @@ const withSources = (answer: string, citations: Citation[]): string => {
     .filter((c, i, all) => all.findIndex((item) => item.url === c.url) === i)
     .slice(0, 3);
   if (!unique.length) return answer || 'Concluído.';
-  // Títulos com colchetes quebrariam o link em Markdown.
-  const list = unique.map((c, i) => `${i + 1}. [${(c.title || 'Fonte').replace(/[[\]]/g, '')}](${c.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})`).join('\n');
-  return `${answer || 'Encontrei estas informações.'}\n\n**Fontes consultadas**\n${list}`;
+  const list = unique.map((c, i) => `${i + 1}. ${c.title || 'Fonte'}\n${c.url}`).join('\n');
+  return `${answer || 'Encontrei estas informações.'}\n\nFontes consultadas:\n${list}`;
 };
 
 type AssistantPayload = { output?: unknown; text?: string; citations?: unknown } | null;
+
+/** Pede à função as ferramentas da web (cartões, contas, orçamentos, resumo e metas), além das do app. */
+const TOOLSET = 'web-2';
+const WEEKDAY_NAMES = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
 
 const FUNCTION_URL = `${supabaseUrl}/functions/v1/nexo-assistant`;
 /** Um pouco acima do limite da função (45 s), para a mensagem de erro dela chegar primeiro. */
@@ -387,8 +616,7 @@ const requestRound = async (body: Record<string, unknown>, onDelta: (chunk: stri
           'Content-Type': 'application/json',
           Accept: 'text/event-stream, application/json',
         },
-        // markdown: a versão web formata a resposta (títulos, listas, links e imagens).
-        body: JSON.stringify({ ...body, stream: true, markdown: true }),
+        body: JSON.stringify({ ...body, stream: true }),
         signal: controller.signal,
         credentials: 'omit',
         referrerPolicy: 'no-referrer',
@@ -405,7 +633,10 @@ const requestRound = async (body: Record<string, unknown>, onDelta: (chunk: stri
       try {
         return await readEventStream(response.body, onDelta);
       } catch (error) {
-        if (controller.signal.aborted) throw new Error('O assistente demorou demais para responder. Tente novamente.');
+        if (controller.signal.aborted) {
+          // eslint-disable-next-line preserve-caught-error -- a mensagem é para o usuário; o erro do stream interrompido não acrescenta nada.
+          throw new Error('O assistente demorou demais para responder. Tente novamente.');
+        }
         throw error;
       }
     }
@@ -428,6 +659,7 @@ export const aiService = {
     const now = new Date();
     const context = {
       today: toISODate(now),
+      weekday: WEEKDAY_NAMES[now.getDay()],
       localTime: formatTime(now.toISOString()),
       timezoneOffsetMinutes: now.getTimezoneOffset(),
       language: 'pt-BR',
@@ -446,7 +678,7 @@ export const aiService = {
       }
 
       let roundText = '';
-      const payload = await requestRound({ input, context, allowWebSearch: !webSearchUsed }, (chunk) => {
+      const payload = await requestRound({ input, context, allowWebSearch: !webSearchUsed, toolset: TOOLSET }, (chunk) => {
         roundText += chunk;
         options.onText?.(roundText);
       });

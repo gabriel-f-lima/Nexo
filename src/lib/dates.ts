@@ -24,6 +24,82 @@ export const addDays = (date: Date, amount: number): Date => {
 /** Semana começando na segunda-feira, como no aplicativo. */
 export const weekStart = (date: Date): Date => addDays(date, -((date.getDay() + 6) % 7));
 
+/* Contas com chaves de data ('AAAA-MM-DD') e de mês ('AAAA-MM'), sem depender do fuso. */
+
+export const daysInMonth = (year: number, monthIndex: number): number => new Date(year, monthIndex + 1, 0).getDate();
+
+/** 'AAAA-MM' de uma data 'AAAA-MM-DD'. */
+export const monthOfKey = (dateKey: string): string => dateKey.slice(0, 7);
+
+/** Soma meses a 'AAAA-MM'. */
+export const addMonthsToMonth = (monthKey: string, amount: number): string => {
+  const [year, month] = monthKey.split('-').map(Number);
+  const index = year * 12 + (month - 1) + amount;
+  return `${Math.floor(index / 12)}-${pad((index % 12) + 1)}`;
+};
+
+/** Dia do mês ajustado ao tamanho do mês (dia 31 em fevereiro vira 28 ou 29). */
+export const dayInMonth = (monthKey: string, day: number): string => {
+  const [year, month] = monthKey.split('-').map(Number);
+  return `${monthKey}-${pad(Math.min(day, daysInMonth(year, month - 1)))}`;
+};
+
+/** Soma meses a 'AAAA-MM-DD', mantendo o dia quando ele existe no mês de destino. */
+export const addMonthsToKey = (dateKey: string, amount: number): string =>
+  dayInMonth(addMonthsToMonth(monthOfKey(dateKey), amount), Number(dateKey.slice(8, 10)));
+
+/** Dias de a até b ('AAAA-MM-DD'); negativo se b vem antes. */
+export const daysBetween = (a: string, b: string): number => {
+  const utc = (key: string) => {
+    const [year, month, day] = key.split('-').map(Number);
+    return Date.UTC(year, month - 1, day);
+  };
+  return Math.round((utc(b) - utc(a)) / 86_400_000);
+};
+
+/** Soma dias a 'AAAA-MM-DD'. */
+export const addDaysToKey = (dateKey: string, amount: number): string => toISODate(addDays(parseDateKey(dateKey), amount));
+
+/** Ex.: '23/10' ou '23/10/2027' quando é de outro ano. */
+export const formatShortDate = (dateKey: string, today: string = toISODate()): string => {
+  const [year, month, day] = dateKey.split('-');
+  return year === today.slice(0, 4) ? `${day}/${month}` : `${day}/${month}/${year}`;
+};
+
+/** Ex.: 'outubro de 2026' para '2026-10'. */
+export const formatMonthName = (monthKey: string): string => {
+  const [year, month] = monthKey.split('-').map(Number);
+  return `${MONTHS[month - 1]} de ${year}`;
+};
+
+/** 'Outubro de 2026' (só a primeira letra maiúscula). */
+export const formatMonthTitle = (monthKey: string): string => {
+  const text = formatMonthName(monthKey);
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
+
+const WEEKDAY_SHORT = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+
+/** 'hoje', 'amanhã', 'ontem' ou 'terça, 27/10'. */
+export const dayLabel = (dateKey: string, today: string = toISODate()): string => {
+  const diff = daysBetween(today, dateKey);
+  if (diff === 0) return 'hoje';
+  if (diff === 1) return 'amanhã';
+  if (diff === -1) return 'ontem';
+  return `${WEEKDAY_SHORT[parseDateKey(dateKey).getDay()]}, ${formatShortDate(dateKey, today)}`;
+};
+
+/** 'hoje', 'amanhã', 'ontem', 'em 3 dias', 'há 2 dias' ou a data curta. */
+export const relativeDay = (dateKey: string, today: string = toISODate()): string => {
+  const diff = daysBetween(today, dateKey);
+  if (diff === 0) return 'hoje';
+  if (diff === 1) return 'amanhã';
+  if (diff === -1) return 'ontem';
+  if (diff > 1 && diff <= 6) return `em ${diff} dias`;
+  if (diff < -1 && diff >= -6) return `há ${-diff} dias`;
+  return formatShortDate(dateKey, today);
+};
+
 const WEEKDAYS = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 export const MONTHS = [
   'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',

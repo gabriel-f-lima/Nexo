@@ -1,0 +1,9 @@
+/* Peças das páginas públicas (início e termos): marca, barra e rodapé. */
+
+.legal-top-inner, .legal-footer-inner, .landing-nav-inner { width: min(1120px, 100%); margin: 0 auto; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.footer-links { display: flex; gap: 16px; flex-wrap: wrap; }
+.footer-links a { color: var(--text-2); }
+.footer-links a:hover { color: var(--accent); }
+.brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 800; font-size: 1.2rem; }
+.brand:hover { text-decoration: none; color: var(--text); }
+.brand img { width: 34px; height: 34px; }
