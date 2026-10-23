@@ -46,7 +46,7 @@ export default function Ajuda() {
           <div className="section-title" style={{ fontSize: 16 }}>Ainda precisa de ajuda?</div>
           <p className="text-2" style={{ fontSize: 13 }}>Fale com o suporte por e-mail.</p>
           <motion.a
-            href="mailto:g.ferreira.ldev@gmail.com?subject=Ajuda%20com%20o%20Nexo"
+            href="mailto:contato@app-nexo.online?subject=Ajuda%20com%20o%20Nexo"
             className="btn btn-primary btn-sm"
             whileTap={{ scale: 0.97 }}
             style={{ textDecoration: 'none' }}
