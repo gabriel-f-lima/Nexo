@@ -57,6 +57,18 @@ export default defineConfig(({ mode }) => {
     define: { __APP_VERSION__: JSON.stringify(pkg.version) },
     server: { port: 5173 },
     preview: { headers: previewHeaders },
-    build: { sourcemap: false },
+    build: {
+      sourcemap: false,
+      rollupOptions: {
+        output: {
+          // Bibliotecas em arquivos próprios: mudam pouco, então ficam no cache entre uma versão e outra do site.
+          manualChunks: {
+            react: ['react', 'react-dom', 'react-router-dom'],
+            motion: ['framer-motion'],
+            supabase: ['@supabase/supabase-js'],
+          },
+        },
+      },
+    },
   };
 });

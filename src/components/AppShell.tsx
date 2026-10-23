@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Sparkles } from 'lucide-react';
@@ -9,6 +9,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { useAuthStore } from '../store/auth';
 import { useDataStore } from '../store/data';
 import { startReminderWatcher } from '../lib/reminder';
+import { prefetchAppPages } from '../pages/appPages';
 
 /** Só caminhos internos do app vindos de notificações. */
 const isAppPath = (value: unknown): value is string => typeof value === 'string' && /^\/app(\/[a-z-]*)?$/.test(value);
@@ -20,6 +21,7 @@ export default function AppShell() {
   const initializing = useAuthStore((s) => s.initializing);
 
   useEffect(() => startReminderWatcher(), []);
+  useEffect(() => prefetchAppPages(), []);
   useEffect(() => {
     const id = window.setInterval(() => useDataStore.getState().pruneExpiredLocal(), 60 * 60 * 1000);
     return () => window.clearInterval(id);
@@ -66,7 +68,9 @@ export default function AppShell() {
             animate={onChat ? { opacity: 1 } : { opacity: 1, y: 0 }}
             transition={{ duration: 0.26, ease: [0.22, 1, 0.36, 1] }}
           >
-            <Outlet />
+            <Suspense fallback={<div className="loading-inline" role="status" aria-label="Carregando"><div className="spinner" /></div>}>
+              <Outlet />
+            </Suspense>
           </motion.main>
         </ErrorBoundary>
       </div>

@@ -37,10 +37,6 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   background-color: var(--bg);
-  background-image:
-    radial-gradient(900px 520px at 85% -12%, rgba(90, 240, 170, 0.07), transparent 62%),
-    radial-gradient(760px 420px at -10% 112%, rgba(131, 181, 255, 0.05), transparent 60%);
-  background-attachment: fixed;
   color: var(--text);
   font-family: var(--font);
   font-size: 15px;
@@ -49,6 +45,13 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   overscroll-behavior-y: none;
+}
+/* Brilho do fundo numa camada fixa própria: não é redesenhado a cada rolagem (background-attachment: fixed era). */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background-image:
+    radial-gradient(900px 520px at 85% -12%, rgba(90, 240, 170, 0.07), transparent 62%),
+    radial-gradient(760px 420px at -10% 112%, rgba(131, 181, 255, 0.05), transparent 60%);
 }
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; padding: 0; }
@@ -428,7 +431,16 @@ html.chat-lock, html.chat-lock body { overflow: hidden; overscroll-behavior: non
 .dots { display: flex; gap: 4px; }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
-.chat-empty { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 24px 20px; text-align: center; }
+/* Centraliza com margens automáticas: se faltar altura (teclado aberto), o topo com a logo continua visível. */
+.chat-empty { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 24px 20px; text-align: center; }
+.chat-empty > * { flex-shrink: 0; }
+.chat-empty > :first-child { margin-top: auto; }
+.chat-empty > :last-child { margin-bottom: auto; }
+/* Teclado aberto: versão compacta, com a logo e a saudação no topo. */
+html.chat-short .chat-empty { gap: 12px; padding-top: 16px; }
+html.chat-short .orb { width: 64px; height: 64px; border-radius: 20px; }
+html.chat-short .orb img { width: 48px; height: 48px; }
+html.chat-short .greeting { font-size: 20px; }
 .orb {
   width: 96px; height: 96px; border-radius: 30px; overflow: hidden;
   display: flex; align-items: center; justify-content: center;
@@ -786,4 +798,14 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
   .caret { animation: none; }
   .plan-card, .plan-skeleton { transition: none; animation: none; }
+}
+
+/* ===== Celular: menos efeitos pesados ===== */
+/* O desfoque do que está atrás (backdrop-filter) pesa na rolagem e ao abrir o teclado; fundos quase opacos no lugar. */
+@media (pointer: coarse), (max-width: 1023px) {
+  .app-header, .chat-top, .landing-nav, .backdrop, .drawer-overlay, .toast {
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+  }
+  .app-header, .chat-top, .landing-nav { background: rgba(6, 8, 7, 0.97); }
+  .backdrop { background: rgba(2, 4, 3, 0.82); }
 }

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ArrowUp, History, SquarePen, Star, Trash2 } from 'lucide-react';
 import { MenuButton, Modal } from '../components/ui';
@@ -98,6 +98,32 @@ function AssistantBubble({ text, writing }: { text: string; writing?: boolean })
   );
 }
 
+/**
+ * Uma mensagem da conversa. Memorizada: enquanto a resposta é "digitada", só a mensagem que está
+ * aparecendo é redesenhada, e não o histórico inteiro a cada quadro.
+ */
+const MessageRow = memo(function MessageRow({ message, revealText, writing }: {
+  message: ChatMessage;
+  /** Parte já exibida da resposta que está aparecendo agora. */
+  revealText?: string;
+  writing?: boolean;
+}) {
+  return (
+    <motion.div
+      className={`msg ${message.role === 'user' ? 'user' : 'ai'}`}
+      initial={revealText !== undefined ? false : { opacity: 0, y: 10, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+    >
+      {message.role === 'user' ? (
+        <div className="bubble user">{linkify(message.content)}</div>
+      ) : (
+        <AssistantBubble writing={writing} text={revealText ?? message.content} />
+      )}
+    </motion.div>
+  );
+});
+
 /** Botão do topo com ícone e rótulo (em telas estreitas só o ícone; o nome continua na dica e no leitor de tela). */
 function TopButton({ icon, label, onClick, primary }: { icon: ReactNode; label: string; onClick: () => void; primary?: boolean }) {
   return (
@@ -134,6 +160,7 @@ export default function Chat() {
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [greeting, setGreeting] = useState(getGreeting());
   const bodyRef = useRef<HTMLDivElement>(null);
+  const emptyRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottom = useRef(true);
   const busyRef = useRef(false);
@@ -151,9 +178,13 @@ export default function Chat() {
     const update = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        root.style.setProperty('--chat-vh', `${viewport ? viewport.height : window.innerHeight}px`);
+        const height = viewport ? viewport.height : window.innerHeight;
+        root.style.setProperty('--chat-vh', `${height}px`);
         root.style.setProperty('--chat-top', `${viewport ? Math.max(0, viewport.offsetTop) : 0}px`);
+        root.classList.toggle('chat-short', height < 560);
         if (window.scrollY) window.scrollTo(0, 0);
+        // Na tela inicial, mantém a logo à vista quando o teclado abre.
+        if (emptyRef.current) emptyRef.current.scrollTop = 0;
         const body = bodyRef.current;
         if (body && stickToBottom.current) body.scrollTop = body.scrollHeight;
       });
@@ -168,7 +199,7 @@ export default function Chat() {
       viewport?.removeEventListener('resize', update);
       viewport?.removeEventListener('scroll', update);
       window.removeEventListener('resize', update);
-      root.classList.remove('chat-lock');
+      root.classList.remove('chat-lock', 'chat-short');
       root.style.removeProperty('--chat-vh');
       root.style.removeProperty('--chat-top');
     };
@@ -387,19 +418,12 @@ export default function Chat() {
               {messages.map((message: ChatMessage) => {
                 const isRevealing = message.id === revealId;
                 return (
-                  <motion.div
+                  <MessageRow
                     key={message.id}
-                    className={`msg ${message.role === 'user' ? 'user' : 'ai'}`}
-                    initial={isRevealing ? false : { opacity: 0, y: 10, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                  >
-                    {message.role === 'user' ? (
-                      <div className="bubble user">{linkify(message.content)}</div>
-                    ) : (
-                      <AssistantBubble writing={isRevealing && revealing} text={isRevealing ? shownText : message.content} />
-                    )}
-                  </motion.div>
+                    message={message}
+                    revealText={isRevealing ? shownText : undefined}
+                    writing={isRevealing && revealing}
+                  />
                 );
               })}
             </AnimatePresence>
@@ -413,7 +437,7 @@ export default function Chat() {
           </div>
         </div>
       ) : (
-        <div className="chat-empty">
+        <div className="chat-empty" ref={emptyRef}>
           <motion.div
             className="orb"
             initial={{ scale: 0.8, opacity: 0 }}

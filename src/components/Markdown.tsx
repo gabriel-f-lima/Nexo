@@ -1,4 +1,4 @@
-import { Fragment, useState, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type ReactNode } from 'react';
 
 /**
  * Markdown leve para as respostas do assistente: títulos, negrito/itálico, listas, citações, código,
@@ -244,7 +244,7 @@ const closeOpenBold = (text: string) => ((text.match(/\*\*/g)?.length ?? 0) % 2 
  * Com `streaming`, tolera marcações que ainda não terminaram de chegar.
  */
 export default function Markdown({ text, trailing, streaming }: { text: string; trailing?: ReactNode; streaming?: boolean }) {
-  const blocks = parseBlocks(streaming ? closeOpenBold(text) : text);
+  const blocks = useMemo(() => parseBlocks(streaming ? closeOpenBold(text) : text), [text, streaming]);
   const lastIndex = blocks.length - 1;
 
   return (
