@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEv
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { ArrowUp, History, SquarePen, Star, Trash2 } from 'lucide-react';
 import { MenuButton, Modal } from '../components/ui';
+import Markdown from '../components/Markdown';
 import { useAuthStore } from '../store/auth';
 import { useDataStore, type ChatMessage, type Conversation } from '../store/data';
 import { aiService } from '../lib/assistant';
@@ -81,13 +82,17 @@ function TypingIndicator() {
   );
 }
 
-function AssistantBubble({ children, writing }: { children: ReactNode; writing?: boolean }) {
+/** Resposta do assistente, formatada (títulos, listas, negrito, links e imagens). */
+function AssistantBubble({ text, writing }: { text: string; writing?: boolean }) {
   return (
     <>
       <img className="msg-avatar" src="/nexo-logo.png" alt="" width={30} height={30} />
       <div className={`bubble ai${writing ? ' writing' : ''}`}>
-        {children}
-        {writing ? <span className="caret" aria-hidden="true" /> : null}
+        <Markdown
+          text={text}
+          streaming={writing}
+          trailing={writing ? <span className="caret" aria-hidden="true" /> : null}
+        />
       </div>
     </>
   );
@@ -361,9 +366,7 @@ export default function Chat() {
                     {message.role === 'user' ? (
                       <div className="bubble user">{linkify(message.content)}</div>
                     ) : (
-                      <AssistantBubble writing={isRevealing && revealing}>
-                        {linkify(isRevealing ? shownText : message.content)}
-                      </AssistantBubble>
+                      <AssistantBubble writing={isRevealing && revealing} text={isRevealing ? shownText : message.content} />
                     )}
                   </motion.div>
                 );
@@ -372,7 +375,7 @@ export default function Chat() {
 
             {busy && shownText ? (
               <div className="msg ai">
-                <AssistantBubble writing>{linkify(shownText)}</AssistantBubble>
+                <AssistantBubble writing text={shownText} />
               </div>
             ) : null}
             <AnimatePresence>{busy && !shownText ? <TypingIndicator key="typing" /> : null}</AnimatePresence>

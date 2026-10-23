@@ -292,8 +292,9 @@ const withSources = (answer: string, citations: Citation[]): string => {
     .filter((c, i, all) => all.findIndex((item) => item.url === c.url) === i)
     .slice(0, 3);
   if (!unique.length) return answer || 'Concluído.';
-  const list = unique.map((c, i) => `${i + 1}. ${c.title || 'Fonte'}\n${c.url}`).join('\n');
-  return `${answer || 'Encontrei estas informações.'}\n\nFontes consultadas:\n${list}`;
+  // Títulos com colchetes quebrariam o link em Markdown.
+  const list = unique.map((c, i) => `${i + 1}. [${(c.title || 'Fonte').replace(/[[\]]/g, '')}](${c.url.replace(/\(/g, '%28').replace(/\)/g, '%29')})`).join('\n');
+  return `${answer || 'Encontrei estas informações.'}\n\n**Fontes consultadas**\n${list}`;
 };
 
 type AssistantPayload = { output?: unknown; text?: string; citations?: unknown } | null;
@@ -386,7 +387,8 @@ const requestRound = async (body: Record<string, unknown>, onDelta: (chunk: stri
           'Content-Type': 'application/json',
           Accept: 'text/event-stream, application/json',
         },
-        body: JSON.stringify({ ...body, stream: true }),
+        // markdown: a versão web formata a resposta (títulos, listas, links e imagens).
+        body: JSON.stringify({ ...body, stream: true, markdown: true }),
         signal: controller.signal,
         credentials: 'omit',
         referrerPolicy: 'no-referrer',
